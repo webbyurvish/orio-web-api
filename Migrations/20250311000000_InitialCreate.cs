@@ -1,10 +1,14 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using PKeetDashboard.API.Data;
 
 #nullable disable
 
 namespace PKeetDashboard.API.Migrations
 {
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20250311000000_InitialCreate")]
     public partial class InitialCreate : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)

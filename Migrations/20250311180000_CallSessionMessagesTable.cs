@@ -1,10 +1,14 @@
 using System;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using PKeetDashboard.API.Data;
 
 #nullable disable
 
 namespace PKeetDashboard.API.Migrations
 {
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20250311180000_CallSessionMessagesTable")]
     public partial class CallSessionMessagesTable : Migration
     {
         protected override void Up(MigrationBuilder migrationBuilder)
