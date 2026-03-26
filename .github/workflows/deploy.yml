@@ -1,0 +1,33 @@
+name: Deploy API to VM
+
+on:
+  workflow_run:
+    workflows: ["Build and publish API image (GHCR)"]
+    types: [completed]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-orio-web-api
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH (pull + restart api)
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.PROD_SSH_HOST }}
+          username: ${{ secrets.PROD_SSH_USER }}
+          key: ${{ secrets.PROD_SSH_KEY }}
+          script: |
+            set -e
+            cd ~/orio/deploy
+            docker-compose pull api
+            docker stop orio-api || true
+            docker rm orio-api || true
+            docker-compose up -d --no-deps api
+            docker logs -n 60 orio-api || true
