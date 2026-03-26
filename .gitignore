@@ -1,0 +1,24 @@
+# .NET / Visual Studio
+bin/
+obj/
+.vs/
+
+*.user
+*.suo
+*.cache
+*.log
+
+# Rider / JetBrains
+.idea/
+
+# VS Code
+.vscode/
+
+# ASP.NET Core secrets / local overrides
+appsettings.*.Local.json
+appsettings.*.Development.json
+
+# Publish outputs
+publish/
+artifacts/
+TestResults/
