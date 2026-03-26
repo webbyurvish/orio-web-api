@@ -8,9 +8,6 @@ using PKeetDashboard.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Use port 5050 so Swagger and frontend proxy work whether you run via "dotnet run", IDE, or the .exe
-builder.WebHost.UseUrls("http://localhost:5050");
-
 var connectionString = builder.Configuration.GetConnectionString("DefaultConnection");
 if (string.IsNullOrEmpty(connectionString))
     throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
