@@ -4,6 +4,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.IdentityModel.Tokens;
 using Microsoft.OpenApi.Models;
 using PKeetDashboard.API.Data;
+using PKeetDashboard.API.Options;
 using PKeetDashboard.API.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -59,10 +60,16 @@ builder.Services.AddCors(options =>
     });
 });
 
+builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection(StripeOptions.SectionName));
 builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<AuthService>();
 builder.Services.AddSingleton<DesktopAuthCodeStore>();
 builder.Services.AddHttpClient();
+builder.Services.AddHttpClient("ComputerVision", client =>
+{
+    client.Timeout = TimeSpan.FromMinutes(2);
+});
+builder.Services.AddSingleton<ComputerVisionOcrService>();
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 

@@ -18,7 +18,15 @@ obj/
 appsettings.*.Local.json
 appsettings.*.Development.json
 
+# Local env (never commit secrets)
+.env
+.env.local
+.env.*.local
+
 # Publish outputs
 publish/
 artifacts/
 TestResults/
+
+# Accidental local publish / compile-check output (never commit)
+bin-compile-check/
