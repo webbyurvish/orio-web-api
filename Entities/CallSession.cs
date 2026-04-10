@@ -17,4 +17,10 @@ public class CallSession
     public DateTime? EndsAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public int AiUsage { get; set; }
+    /// <summary>Total credits charged for this session (for audit/debug).</summary>
+    public decimal CreditsCharged { get; set; } = 0m;
+
+    /// <summary>Auto-generated notes after the call ends (markdown).</summary>
+    public string? AiNotes { get; set; }
+    public DateTime? AiNotesUpdatedAt { get; set; }
 }

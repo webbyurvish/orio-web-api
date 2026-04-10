@@ -8,4 +8,7 @@ public class Resume
     public string FileName { get; set; } = string.Empty;
     public byte[] Content { get; set; } = Array.Empty<byte>();
     public DateTime CreatedAt { get; set; }
+    public DateTime? UpdatedAt { get; set; }
+    /// <summary>Serialized <see cref="Models.ResumeStructuredDocument"/> JSON.</summary>
+    public string? StructuredDataJson { get; set; }
 }

@@ -13,4 +13,10 @@ public class User
     public DateTime CreatedAt { get; set; }
     public DateTime UpdatedAt { get; set; }
     public bool IsActive { get; set; }
+    /// <summary>Call credits balance. Rule: 30 minutes = 0.5 credits.</summary>
+    public decimal CallCredits { get; set; } = 0m;
+
+    public bool IsAdmin { get; set; }
+    public DateTime? LastActiveAtUtc { get; set; }
 }
+

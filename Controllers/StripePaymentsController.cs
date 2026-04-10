@@ -1,8 +1,12 @@
 using System.Security.Claims;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
+using PKeetDashboard.API.Data;
 using PKeetDashboard.API.DTOs;
+using PKeetDashboard.API.Entities;
+using PKeetDashboard.API.Analytics;
 using PKeetDashboard.API.Options;
 using PKeetDashboard.API.Services;
 using Stripe;
@@ -17,13 +21,19 @@ public class StripePaymentsController : ControllerBase
 {
     private readonly StripeOptions _stripe;
     private readonly ILogger<StripePaymentsController> _logger;
+    private readonly AppDbContext _db;
+    private readonly IAnalyticsRecorder _analytics;
 
     public StripePaymentsController(
+        AppDbContext db,
         IOptions<StripeOptions> stripe,
-        ILogger<StripePaymentsController> logger)
+        ILogger<StripePaymentsController> logger,
+        IAnalyticsRecorder analytics)
     {
         _stripe = stripe.Value;
         _logger = logger;
+        _db = db;
+        _analytics = analytics;
     }
 
     /// <summary>Whether checkout uses INR (enables UPI on Stripe Checkout for eligible accounts).</summary>
@@ -204,17 +214,82 @@ public class StripePaymentsController : ControllerBase
         }
 
         session.Metadata.TryGetValue("product_id", out var productId);
-        if (string.IsNullOrEmpty(productId) || StripePaymentCatalog.TryGet(productId) == null)
+        var item = string.IsNullOrEmpty(productId) ? null : StripePaymentCatalog.TryGet(productId);
+        if (item == null)
         {
             _logger.LogWarning("Paid session {SessionId} missing valid product_id metadata", session.Id);
             return BadRequest(new { message = "Session metadata is invalid." });
         }
 
+        var useInr = UseInrCheckout(_stripe);
+        var alreadyApplied = await _db.StripePaymentReceipts.AnyAsync(r => r.StripeSessionId == session.Id, ct);
+        if (!alreadyApplied && Guid.TryParse(userIdStr, out var uid2))
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == uid2, ct);
+            if (user != null)
+            {
+                decimal appliedCredits = 0m;
+                if (item.CreditsDelta > 0)
+                {
+                    appliedCredits = item.CreditsDelta;
+                    user.CallCredits += appliedCredits;
+                }
+
+                var currency = useInr ? "INR" : "USD";
+
+                _db.StripePaymentReceipts.Add(new StripePaymentReceipt
+                {
+                    Id = Guid.NewGuid(),
+                    UserId = user.Id,
+                    StripeSessionId = session.Id,
+                    ProductId = item.Id,
+                    CreditsApplied = appliedCredits,
+                    CreatedAt = DateTime.UtcNow,
+                    AmountUsdCents = item.UnitAmountUsdCents,
+                    Currency = currency
+                });
+                await _db.SaveChangesAsync(ct);
+
+                var purchaseEvent = item.Id switch
+                {
+                    "sub_monthly" or "sub_yearly" => AnalyticsEventTypes.SubscriptionPurchased,
+                    "lifetime" => AnalyticsEventTypes.LifetimePurchased,
+                    _ => AnalyticsEventTypes.CreditsPurchased
+                };
+                await _analytics.RecordAsync(
+                    user.Id,
+                    purchaseEvent,
+                    System.Text.Json.JsonSerializer.Serialize(new { productId = item.Id, credits = appliedCredits }),
+                    "server",
+                    null,
+                    ct);
+            }
+        }
+
+        decimal appliedCreditsOut = 0m;
+        if (item.CreditsDelta > 0)
+        {
+            var receipt = await _db.StripePaymentReceipts.AsNoTracking()
+                .FirstOrDefaultAsync(r => r.StripeSessionId == session.Id, ct);
+            appliedCreditsOut = receipt?.CreditsApplied ?? 0m;
+        }
+
+        decimal creditsBalance = 0m;
+        if (Guid.TryParse(userIdStr, out var userGuid))
+        {
+            creditsBalance = await _db.Users
+                .Where(u => u.Id == userGuid)
+                .Select(u => u.CallCredits)
+                .FirstOrDefaultAsync(ct);
+        }
+
         return Ok(new VerifyStripeSessionResponse
         {
             Paid = true,
-            ProductId = productId,
+            ProductId = item.Id,
             SessionId = session.Id,
+            CreditsApplied = appliedCreditsOut,
+            CreditsBalance = creditsBalance,
         });
     }
 

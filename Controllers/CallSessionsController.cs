@@ -1,9 +1,16 @@
 using System.Security.Claims;
+using System.Text.Json;
+using Azure.AI.OpenAI;
+using Azure;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
+using PKeetDashboard.API.Analytics;
 using PKeetDashboard.API.Data;
 using PKeetDashboard.API.Entities;
+using PKeetDashboard.API.Services;
 
 namespace PKeetDashboard.API.Controllers;
 
@@ -13,10 +20,16 @@ namespace PKeetDashboard.API.Controllers;
 public class CallSessionsController : ControllerBase
 {
     private readonly AppDbContext _db;
+    private readonly IConfiguration _configuration;
+    private readonly ILogger<CallSessionsController> _logger;
+    private readonly IAnalyticsRecorder _analytics;
 
-    public CallSessionsController(AppDbContext db)
+    public CallSessionsController(AppDbContext db, IConfiguration configuration, ILogger<CallSessionsController> logger, IAnalyticsRecorder analytics)
     {
         _db = db;
+        _configuration = configuration;
+        _logger = logger;
+        _analytics = analytics;
     }
 
     [HttpPost]
@@ -51,6 +64,14 @@ public class CallSessionsController : ControllerBase
         _db.CallSessions.Add(session);
         await _db.SaveChangesAsync(ct);
 
+        await _analytics.RecordAsync(
+            userId,
+            AnalyticsEventTypes.SessionCreated,
+            JsonSerializer.Serialize(new { sessionId = session.Id, free = session.IsFreeSession }),
+            "server",
+            session.Id,
+            ct);
+
         var dto = MapToDto(session, null);
         return StatusCode(201, dto);
     }
@@ -82,9 +103,32 @@ public class CallSessionsController : ControllerBase
         return Ok(MapToDto(session, null));
     }
 
+    [HttpDelete("{id:guid}")]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(404)]
+    public async Task<IActionResult> Delete([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var session = await _db.CallSessions.FirstOrDefaultAsync(s => s.Id == id && s.UserId == userId, ct);
+        if (session == null)
+            return NotFound();
+
+        _db.CallSessions.Remove(session);
+        await _db.SaveChangesAsync(ct);
+        return NoContent();
+    }
+
     [HttpGet]
     [ProducesResponseType(typeof(PagedResult<CallSessionDto>), 200)]
-    public async Task<ActionResult<PagedResult<CallSessionDto>>> List([FromQuery] int page = 1, [FromQuery] int pageSize = 10, CancellationToken ct = default)
+    public async Task<ActionResult<PagedResult<CallSessionDto>>> List(
+        [FromQuery] int page = 1,
+        [FromQuery] int pageSize = 10,
+        [FromQuery] string? view = null,
+        CancellationToken ct = default)
     {
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
@@ -95,8 +139,29 @@ public class CallSessionsController : ControllerBase
 
         var query = _db.CallSessions
             .AsNoTracking()
-            .Where(s => s.UserId == userId)
-            .OrderByDescending(s => s.CreatedAt);
+            .Where(s => s.UserId == userId);
+
+        // Optional list view: must match dashboard "All / Live / Ended" semantics so pagination totals are correct.
+        var utcNow = DateTime.UtcNow;
+        var v = (view ?? "all").Trim().ToLowerInvariant();
+        // Use ToLower() comparisons — EF Core cannot translate string.Equals(..., StringComparison).
+        if (v is "live")
+        {
+            query = query.Where(s =>
+                (s.Status ?? "").Trim().ToLower() != "not activated" &&
+                !(
+                    (s.Status ?? "").Trim().ToLower() == "ended" ||
+                    (s.EndsAt.HasValue && s.EndsAt.Value <= utcNow)
+                ));
+        }
+        else if (v is "ended")
+        {
+            query = query.Where(s =>
+                (s.Status ?? "").Trim().ToLower() == "ended" ||
+                (s.EndsAt.HasValue && s.EndsAt.Value <= utcNow));
+        }
+
+        query = query.OrderByDescending(s => s.CreatedAt);
 
         var total = await query.CountAsync(ct);
         var items = await query
@@ -129,6 +194,25 @@ public class CallSessionsController : ControllerBase
             PageSize = pageSize,
             TotalCount = total
         });
+    }
+
+    [HttpGet("{id:guid}")]
+    [ProducesResponseType(typeof(CallSessionDto), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<CallSessionDto>> Get([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var session = await _db.CallSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.UserId == userId, ct);
+        if (session == null)
+            return NotFound();
+
+        return Ok(MapToDto(session, null));
     }
 
     [HttpGet("{id:guid}/messages")]
@@ -207,11 +291,32 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
+        // Charge credits for paid sessions on activation window start: 30 mins = 0.5 credits.
+        if (!session.IsFreeSession)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null) return Unauthorized();
+            const decimal cost = 0.5m;
+            if (user.CallCredits < cost)
+                return StatusCode(402, new { message = "Insufficient call credits. Please purchase more credits to start a real session." });
+            user.CallCredits -= cost;
+            session.CreditsCharged += cost;
+        }
+
         // If already ended, allow re-activate by starting a new window from now.
         session.Status = "Active";
         var minutes = session.IsFreeSession ? 2 : 30;
         session.EndsAt = DateTime.UtcNow.AddMinutes(minutes);
         await _db.SaveChangesAsync(ct);
+
+        await _analytics.RecordAsync(
+            userId,
+            AnalyticsEventTypes.SessionActivated,
+            JsonSerializer.Serialize(new { sessionId = session.Id, minutes }),
+            "server",
+            session.Id,
+            ct);
+
         return Ok(MapToDto(session, null));
     }
 
@@ -230,6 +335,22 @@ public class CallSessionsController : ControllerBase
             return NotFound();
 
         minutes = Math.Clamp(minutes, 1, 24 * 60);
+
+        // Charge credits for paid sessions: 30 mins = 0.5 credits (i.e. minutes/60).
+        if (!session.IsFreeSession)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null) return Unauthorized();
+            var cost = Math.Round((decimal)minutes / 60m, 2, MidpointRounding.AwayFromZero);
+            if (cost > 0)
+            {
+                if (user.CallCredits < cost)
+                    return StatusCode(402, new { message = "Insufficient call credits to extend the session." });
+                user.CallCredits -= cost;
+                session.CreditsCharged += cost;
+            }
+        }
+
         session.Status = "Active";
         var baseTime = session.EndsAt.HasValue && session.EndsAt.Value > DateTime.UtcNow ? session.EndsAt.Value : DateTime.UtcNow;
         session.EndsAt = baseTime.AddMinutes(minutes);
@@ -254,7 +375,65 @@ public class CallSessionsController : ControllerBase
         session.Status = "Ended";
         session.EndsAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
+
+        await _analytics.RecordAsync(
+            userId,
+            AnalyticsEventTypes.SessionEnded,
+            JsonSerializer.Serialize(new { sessionId = session.Id, aiUsage = session.AiUsage, minutes = (session.EndsAt!.Value - session.CreatedAt).TotalMinutes }),
+            "server",
+            session.Id,
+            ct);
+
+        // Best-effort: generate AI notes after each call ends (only if transcript is enabled).
+        if (session.SaveTranscript)
+        {
+            try
+            {
+                await GenerateAndPersistAiNotesAsync(session.Id, userId, ct).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "AI notes generation failed for session {SessionId}", session.Id);
+            }
+        }
         return Ok(MapToDto(session, null));
+    }
+
+    [HttpGet("{id:guid}/ai-notes")]
+    [ProducesResponseType(typeof(AiNotesDto), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<AiNotesDto>> GetAiNotes([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var session = await _db.CallSessions
+            .AsNoTracking()
+            .FirstOrDefaultAsync(s => s.Id == id && s.UserId == userId, ct);
+        if (session == null)
+            return NotFound();
+
+        return Ok(new AiNotesDto
+        {
+            Notes = session.AiNotes,
+            UpdatedAt = session.AiNotesUpdatedAt
+        });
+    }
+
+    [HttpPost("{id:guid}/ai-notes/generate")]
+    [ProducesResponseType(typeof(AiNotesDto), 200)]
+    [ProducesResponseType(401)]
+    [ProducesResponseType(404)]
+    public async Task<ActionResult<AiNotesDto>> GenerateAiNotes([FromRoute] Guid id, CancellationToken ct)
+    {
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            return Unauthorized();
+
+        var notes = await GenerateAndPersistAiNotesAsync(id, userId, ct);
+        return Ok(notes);
     }
 
     [HttpPost("{id:guid}/ai-usage")]
@@ -273,6 +452,15 @@ public class CallSessionsController : ControllerBase
 
         session.AiUsage += 1;
         await _db.SaveChangesAsync(ct);
+
+        await _analytics.RecordAsync(
+            userId,
+            AnalyticsEventTypes.AiResponseGenerated,
+            JsonSerializer.Serialize(new { sessionId = session.Id }),
+            "server",
+            session.Id,
+            ct);
+
         return Ok(MapToDto(session, null));
     }
 
@@ -352,6 +540,87 @@ public class CallSessionsController : ControllerBase
         var seconds = remaining.Seconds;
         return $"{minutes:00}:{seconds:00}";
     }
+
+    private async Task<AiNotesDto> GenerateAndPersistAiNotesAsync(Guid sessionId, Guid userId, CancellationToken ct)
+    {
+        var session = await _db.CallSessions.FirstOrDefaultAsync(s => s.Id == sessionId && s.UserId == userId, ct);
+        if (session == null)
+            throw new InvalidOperationException("Session not found.");
+
+        var msgs = await _db.CallSessionMessages
+            .AsNoTracking()
+            .Where(m => m.CallSessionId == sessionId)
+            .OrderBy(m => m.CreatedAt)
+            .Select(m => new { m.Role, m.Content })
+            .ToListAsync(ct);
+
+        if (msgs.Count == 0)
+        {
+            session.AiNotes = null;
+            session.AiNotesUpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return new AiNotesDto { Notes = session.AiNotes, UpdatedAt = session.AiNotesUpdatedAt };
+        }
+
+        static string NormalizeRole(string? role)
+        {
+            var r = (role ?? string.Empty).Trim();
+            if (r.Equals("System", StringComparison.OrdinalIgnoreCase)) return "Interviewer";
+            if (r.Equals("Interviewer", StringComparison.OrdinalIgnoreCase)) return "Interviewer";
+            if (r.Equals("User", StringComparison.OrdinalIgnoreCase)) return "You";
+            return r;
+        }
+
+        var transcriptLines = msgs
+            .Where(m => !string.Equals(m.Role, "Assistant", StringComparison.OrdinalIgnoreCase)
+                     && !string.Equals(m.Role, "AI", StringComparison.OrdinalIgnoreCase))
+            .Select(m => $"{NormalizeRole(m.Role)}: {m.Content}")
+            .ToList();
+
+        if (transcriptLines.Count == 0)
+        {
+            session.AiNotes = null;
+            session.AiNotesUpdatedAt = DateTime.UtcNow;
+            await _db.SaveChangesAsync(ct);
+            return new AiNotesDto { Notes = session.AiNotes, UpdatedAt = session.AiNotesUpdatedAt };
+        }
+
+        var transcript = string.Join("\n", transcriptLines);
+        if (transcript.Length > 80_000)
+            transcript = transcript[^80_000..];
+
+        var endpoint = _configuration["AzureOpenAI:Endpoint"];
+        var key = _configuration["AzureOpenAI:Key"];
+        var deploymentName = _configuration["AzureOpenAI:DeploymentName"] ?? "gpt-4o-mini";
+        if (string.IsNullOrWhiteSpace(endpoint) || string.IsNullOrWhiteSpace(key))
+            throw new InvalidOperationException("AzureOpenAI config missing.");
+
+        var systemPrompt =
+            "You are an expert meeting note-taker for interview calls.\n" +
+            "Summarize the conversation into crisp notes with no fluff.\n\n" +
+            "Output STRICTLY in markdown with these sections and bullet points:\n" +
+            "## Key points\n" +
+            "- ...\n\n" +
+            "## Action items\n" +
+            "- ...\n\n" +
+            "## Decisions\n" +
+            "- ...\n\n" +
+            "If a section has nothing, include a single bullet: - None\n";
+
+        var options = new ChatCompletionsOptions { DeploymentName = deploymentName, Temperature = 0.2f };
+        options.Messages.Add(new ChatRequestSystemMessage(systemPrompt));
+        options.Messages.Add(new ChatRequestUserMessage(
+            "Here is the call transcript:\n\n" + transcript));
+
+        var client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(key));
+        var response = await client.GetChatCompletionsAsync(options, ct).ConfigureAwait(false);
+        var notes = response.Value.Choices.FirstOrDefault()?.Message?.Content?.Trim();
+
+        session.AiNotes = string.IsNullOrWhiteSpace(notes) ? null : notes;
+        session.AiNotesUpdatedAt = DateTime.UtcNow;
+        await _db.SaveChangesAsync(ct);
+        return new AiNotesDto { Notes = session.AiNotes, UpdatedAt = session.AiNotesUpdatedAt };
+    }
 }
 
 public class CreateCallSessionRequest
@@ -406,4 +675,10 @@ public class AddCallSessionMessageRequest
 {
     public string? Role { get; set; }
     public string? Content { get; set; }
+}
+
+public class AiNotesDto
+{
+    public string? Notes { get; set; }
+    public DateTime? UpdatedAt { get; set; }
 }

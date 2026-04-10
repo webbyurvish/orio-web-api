@@ -28,4 +28,10 @@ public class VerifyStripeSessionResponse
 
     [JsonPropertyName("sessionId")]
     public string? SessionId { get; set; }
+
+    [JsonPropertyName("creditsApplied")]
+    public decimal CreditsApplied { get; set; }
+
+    [JsonPropertyName("creditsBalance")]
+    public decimal CreditsBalance { get; set; }
 }

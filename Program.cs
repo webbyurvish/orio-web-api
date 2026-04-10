@@ -23,7 +23,13 @@ builder.Services.AddDbContext<AppDbContext>(options =>
 });
 
 var jwt = builder.Configuration.GetSection("JwtSettings");
-var secretKey = jwt["SecretKey"] ?? "YourSuperSecretKeyThatShouldBeAtLeast32CharactersLong!";
+var secretKey = (jwt["SecretKey"] ?? "YourSuperSecretKeyThatShouldBeAtLeast32CharactersLong!").Trim();
+// HS256 requires a symmetric key of at least 256 bits (32 UTF-8 bytes for typical ASCII secrets).
+if (Encoding.UTF8.GetByteCount(secretKey) < 32)
+    throw new InvalidOperationException(
+        "JwtSettings:SecretKey must be at least 32 bytes in UTF-8 for HS256. " +
+        "Set JwtSettings__SecretKey (and match JWT_SECRET if you use it) to a longer random string, e.g. " +
+        "`openssl rand -base64 48`.");
 
 builder.Services.AddAuthentication(options =>
 {
@@ -44,6 +50,11 @@ builder.Services.AddAuthentication(options =>
     };
 });
 
+builder.Services.AddAuthorization(options =>
+{
+    options.AddPolicy("AdminOnly", policy => policy.RequireClaim("is_admin", "true"));
+});
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowDashboard", policy =>
@@ -61,8 +72,12 @@ builder.Services.AddCors(options =>
 });
 
 builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection(StripeOptions.SectionName));
+builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 builder.Services.AddScoped<JwtService>();
+builder.Services.AddScoped<IAnalyticsRecorder, AnalyticsRecorder>();
+builder.Services.AddScoped<AdminAnalyticsService>();
 builder.Services.AddScoped<AuthService>();
+builder.Services.AddScoped<IEmailSender, EmailSender>();
 builder.Services.AddSingleton<DesktopAuthCodeStore>();
 builder.Services.AddHttpClient();
 builder.Services.AddHttpClient("ComputerVision", client =>
@@ -70,13 +85,15 @@ builder.Services.AddHttpClient("ComputerVision", client =>
     client.Timeout = TimeSpan.FromMinutes(2);
 });
 builder.Services.AddSingleton<ComputerVisionOcrService>();
+builder.Services.AddScoped<ResumeTextExtractor>();
+builder.Services.AddScoped<ResumeStructuredParsingService>();
 builder.Services.AddControllers()
     .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNamingPolicy = System.Text.Json.JsonNamingPolicy.CamelCase);
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Orio AI User Dashboard API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Smeed AI User Dashboard API", Version = "v1" });
     c.OperationFilter<PKeetDashboard.API.Swagger.MultipartFormFileOperationFilter>();
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
@@ -104,7 +121,7 @@ var app = builder.Build();
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Orio AI User Dashboard API v1");
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Smeed AI User Dashboard API v1");
     c.RoutePrefix = "swagger"; // Swagger UI at https://localhost:5050/swagger
 });
 
@@ -119,24 +136,7 @@ using (var scope = app.Services.CreateScope())
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.MigrateAsync();
     await SeedData.SeedAsync(db);
+    await AdminBootstrap.ApplyAsync(db, app.Configuration);
 }
-
-// Open Swagger in the default browser when the API starts
-var swaggerUrl = builder.Configuration["SwaggerBrowserUrl"] ?? "http://localhost:5050/swagger";
-app.Lifetime.ApplicationStarted.Register(() =>
-{
-    try
-    {
-        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-        {
-            FileName = swaggerUrl,
-            UseShellExecute = true
-        });
-    }
-    catch
-    {
-        // Ignore if browser could not be opened (e.g. headless environment)
-    }
-});
 
 app.Run();

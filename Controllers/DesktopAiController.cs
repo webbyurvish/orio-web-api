@@ -1,8 +1,12 @@
+using System.Diagnostics;
+using System.Security.Claims;
 using System.Text.Json.Serialization;
 using Azure;
 using Azure.AI.OpenAI;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using PKeetDashboard.API.Data;
+using PKeetDashboard.API.Entities;
 using PKeetDashboard.API.Services;
 
 namespace PKeetDashboard.API.Controllers;
@@ -17,15 +21,24 @@ public class DesktopAiController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly ILogger<DesktopAiController> _logger;
     private readonly ComputerVisionOcrService _computerVisionOcr;
+    private readonly AppDbContext _db;
 
     public DesktopAiController(
         IConfiguration configuration,
         ILogger<DesktopAiController> logger,
-        ComputerVisionOcrService computerVisionOcr)
+        ComputerVisionOcrService computerVisionOcr,
+        AppDbContext db)
     {
         _configuration = configuration;
         _logger = logger;
         _computerVisionOcr = computerVisionOcr;
+        _db = db;
+    }
+
+    private static decimal EstimateCostUsd(int? promptTokens, int? completionTokens)
+    {
+        var n = (promptTokens ?? 0) + (completionTokens ?? 0);
+        return n * 0.00000015m;
     }
 
     [HttpPost("answer")]
@@ -67,10 +80,65 @@ public class DesktopAiController : ControllerBase
 
         options.Messages.Add(new ChatRequestUserMessage(request.UserContent.Trim()));
 
-        var response = await client.GetChatCompletionsAsync(options);
-        var answer = response.Value.Choices.FirstOrDefault()?.Message?.Content ?? string.Empty;
+        var sw = Stopwatch.StartNew();
+        Response<ChatCompletions> responseWrap;
+        try
+        {
+            responseWrap = await client.GetChatCompletionsAsync(options);
+        }
+        catch (Exception ex)
+        {
+            sw.Stop();
+            await TryLogAiUsageAsync(deploymentName, sw.ElapsedMilliseconds, null, null, null, false, ex.Message);
+            throw;
+        }
+
+        sw.Stop();
+        var completion = responseWrap.Value;
+        var answer = completion.Choices.FirstOrDefault()?.Message?.Content ?? string.Empty;
+        var usage = completion.Usage;
+        await TryLogAiUsageAsync(
+            deploymentName,
+            sw.ElapsedMilliseconds,
+            usage?.PromptTokens,
+            usage?.CompletionTokens,
+            usage?.TotalTokens,
+            true,
+            null);
 
         return Ok(new DesktopAiAnswerResponse { Answer = answer });
+    }
+
+    private async Task TryLogAiUsageAsync(
+        string deploymentName,
+        long elapsedMs,
+        int? promptTokens,
+        int? completionTokens,
+        int? totalTokens,
+        bool success,
+        string? errorMessage)
+    {
+        var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
+            return;
+
+        var err = errorMessage == null ? null : errorMessage.Length > 2000 ? errorMessage[..2000] : errorMessage;
+        _db.AiUsageLogs.Add(new AiUsageLog
+        {
+            Id = Guid.NewGuid(),
+            UserId = userId,
+            CallSessionId = null,
+            DeploymentName = deploymentName.Length > 100 ? deploymentName[..100] : deploymentName,
+            PromptTokens = promptTokens,
+            CompletionTokens = completionTokens,
+            TotalTokens = totalTokens,
+            LatencyMs = (int)Math.Min(elapsedMs, int.MaxValue),
+            Success = success,
+            ErrorMessage = err,
+            EstimatedCostUsd = success ? EstimateCostUsd(promptTokens, completionTokens) : 0,
+            CreatedAtUtc = DateTime.UtcNow
+        });
+        await _db.SaveChangesAsync();
     }
 
     /// <summary>

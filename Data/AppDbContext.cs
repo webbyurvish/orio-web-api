@@ -24,6 +24,12 @@ public class AppDbContext : DbContext
     public DbSet<Resume> Resumes => Set<Resume>();
     public DbSet<CallSession> CallSessions => Set<CallSession>();
     public DbSet<CallSessionMessage> CallSessionMessages => Set<CallSessionMessage>();
+    public DbSet<StripePaymentReceipt> StripePaymentReceipts => Set<StripePaymentReceipt>();
+    public DbSet<EmailVerificationCode> EmailVerificationCodes => Set<EmailVerificationCode>();
+    public DbSet<UserDiscoveryResponse> UserDiscoveryResponses => Set<UserDiscoveryResponse>();
+    public DbSet<UserFeedback> UserFeedbacks => Set<UserFeedback>();
+    public DbSet<AnalyticsEvent> AnalyticsEvents => Set<AnalyticsEvent>();
+    public DbSet<AiUsageLog> AiUsageLogs => Set<AiUsageLog>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -36,6 +42,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.FirstName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.LastName).IsRequired().HasMaxLength(100);
             entity.Property(e => e.GoogleId).HasMaxLength(128);
+            entity.Property(e => e.CallCredits).HasColumnType("decimal(10,2)");
         });
 
         modelBuilder.Entity<PromoBanner>(entity =>
@@ -129,6 +136,7 @@ public class AppDbContext : DbContext
             entity.HasIndex(e => e.UserId);
             entity.Property(e => e.Title).IsRequired().HasMaxLength(500);
             entity.Property(e => e.FileName).IsRequired().HasMaxLength(500);
+            entity.Property(e => e.StructuredDataJson).HasColumnType("nvarchar(max)");
         });
 
         modelBuilder.Entity<CallSession>(entity =>
@@ -141,6 +149,19 @@ public class AppDbContext : DbContext
             entity.Property(e => e.ExtraContext).HasMaxLength(2000);
             entity.Property(e => e.AiModel).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.CreditsCharged).HasColumnType("decimal(10,2)");
+            entity.Property(e => e.AiNotes).HasColumnType("nvarchar(max)");
+        });
+
+        modelBuilder.Entity<StripePaymentReceipt>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.StripeSessionId).IsUnique();
+            entity.Property(e => e.StripeSessionId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ProductId).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.CreditsApplied).HasColumnType("decimal(10,2)");
+            entity.Property(e => e.Currency).HasMaxLength(10);
         });
 
         modelBuilder.Entity<CallSessionMessage>(entity =>
@@ -150,6 +171,57 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Role).IsRequired().HasMaxLength(50);
             entity.Property(e => e.Content).IsRequired();
             entity.HasOne<CallSession>().WithMany().HasForeignKey(e => e.CallSessionId).OnDelete(DeleteBehavior.Cascade);
+        });
+
+        modelBuilder.Entity<EmailVerificationCode>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.Email);
+            entity.Property(e => e.Email).IsRequired().HasMaxLength(255);
+            entity.Property(e => e.CodeHash).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.ExpiresAtUtc).IsRequired();
+            entity.Property(e => e.CreatedAtUtc).IsRequired();
+            entity.Property(e => e.LastSentAtUtc).IsRequired();
+        });
+
+        modelBuilder.Entity<UserDiscoveryResponse>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId).IsUnique();
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.OtherText).HasMaxLength(200);
+            entity.Property(e => e.CreatedAtUtc).IsRequired();
+        });
+
+        modelBuilder.Entity<UserFeedback>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.UserId);
+            entity.HasIndex(e => e.CreatedAtUtc);
+            entity.Property(e => e.Message).IsRequired();
+            entity.Property(e => e.CreatedAtUtc).IsRequired();
+            entity.Property(e => e.SentimentTags).HasMaxLength(500);
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Restrict);
+        });
+
+        modelBuilder.Entity<AnalyticsEvent>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.CreatedAtUtc);
+            entity.HasIndex(e => new { e.EventType, e.CreatedAtUtc });
+            entity.HasIndex(e => new { e.UserId, e.CreatedAtUtc });
+            entity.Property(e => e.EventType).IsRequired().HasMaxLength(80);
+            entity.Property(e => e.Source).IsRequired().HasMaxLength(20);
+        });
+
+        modelBuilder.Entity<AiUsageLog>(entity =>
+        {
+            entity.HasKey(e => e.Id);
+            entity.HasIndex(e => e.CreatedAtUtc);
+            entity.HasIndex(e => new { e.UserId, e.CreatedAtUtc });
+            entity.Property(e => e.DeploymentName).IsRequired().HasMaxLength(100);
+            entity.Property(e => e.EstimatedCostUsd).HasColumnType("decimal(12,6)");
+            entity.HasOne<User>().WithMany().HasForeignKey(e => e.UserId).OnDelete(DeleteBehavior.Cascade);
         });
     }
 }

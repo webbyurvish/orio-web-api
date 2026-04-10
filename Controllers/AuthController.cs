@@ -42,6 +42,48 @@ public class AuthController : ControllerBase
         }
     }
 
+    [HttpPost("register/initiate")]
+    [AllowAnonymous]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(400)]
+    public async Task<IActionResult> RegisterInitiate([FromBody] RegisterInitiateRequest request)
+    {
+        try
+        {
+            await _authService.SendRegisterVerificationCodeAsync(request.Email);
+            return NoContent();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
+    [HttpPost("register/verify")]
+    [AllowAnonymous]
+    [ProducesResponseType(typeof(AuthResponse), 200)]
+    [ProducesResponseType(400)]
+    public async Task<ActionResult<AuthResponse>> RegisterVerify([FromBody] RegisterVerifyRequest request)
+    {
+        try
+        {
+            var response = await _authService.VerifyRegisterCodeAndCreateUserAsync(request);
+            return Ok(response);
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
+    }
+
     [HttpPost("login")]
     [AllowAnonymous]
     [ProducesResponseType(typeof(AuthResponse), 200)]
@@ -105,6 +147,28 @@ public class AuthController : ControllerBase
         if (user == null)
             return NotFound(new { message = "User not found." });
         return Ok(user);
+    }
+
+    [HttpPost("discovery")]
+    [Authorize]
+    [ProducesResponseType(204)]
+    [ProducesResponseType(400)]
+    [ProducesResponseType(401)]
+    public async Task<IActionResult> SaveDiscovery([FromBody] UserDiscoveryRequest request)
+    {
+        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        if (string.IsNullOrWhiteSpace(userId) || !Guid.TryParse(userId, out var guid))
+            return Unauthorized();
+
+        try
+        {
+            await _authService.SaveDiscoveryResponseAsync(guid, request);
+            return NoContent();
+        }
+        catch (ArgumentException ex)
+        {
+            return BadRequest(new { message = ex.Message });
+        }
     }
 
     [HttpPost("desktop/initiate")]
