@@ -16,6 +16,8 @@ obj/
 
 # ASP.NET Core secrets / local overrides
 appsettings.*.Local.json
+# Note: appsettings.*.Development.json does not match appsettings.Development.json
+appsettings.Development.json
 appsettings.*.Development.json
 
 # Local env (never commit secrets)
