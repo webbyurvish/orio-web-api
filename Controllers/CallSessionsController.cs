@@ -51,8 +51,9 @@ public class CallSessionsController : ControllerBase
             ResumeId = request.ResumeId,
             Language = (request.Language ?? "English").Trim().Length > 50 ? request.Language!.Trim()[..50] : (request.Language ?? "English").Trim(),
             SimpleLanguage = request.SimpleLanguage,
+            NaturalSpeakingMode = request.NaturalSpeakingMode ?? false,
             ExtraContext = request.ExtraContext != null && request.ExtraContext.Length > 2000 ? request.ExtraContext[..2000] : request.ExtraContext,
-            AiModel = (request.AiModel ?? "GPT-4.1 Mini").Trim().Length > 100 ? request.AiModel!.Trim()[..100] : (request.AiModel ?? "GPT-4.1 Mini").Trim(),
+            AiModel = ResolveStoredAiModel(request.AiModel),
             SaveTranscript = request.SaveTranscript,
             IsFreeSession = request.IsFreeSession,
             Status = "Not Activated",
@@ -95,8 +96,10 @@ public class CallSessionsController : ControllerBase
         session.ResumeId = request.ResumeId;
         session.Language = (request.Language ?? "English").Trim().Length > 50 ? request.Language!.Trim()[..50] : (request.Language ?? "English").Trim();
         session.SimpleLanguage = request.SimpleLanguage;
+        if (request.NaturalSpeakingMode.HasValue)
+            session.NaturalSpeakingMode = request.NaturalSpeakingMode.Value;
         session.ExtraContext = request.ExtraContext != null && request.ExtraContext.Length > 2000 ? request.ExtraContext[..2000] : request.ExtraContext;
-        session.AiModel = (request.AiModel ?? "GPT-4.1 Mini").Trim().Length > 100 ? request.AiModel!.Trim()[..100] : (request.AiModel ?? "GPT-4.1 Mini").Trim();
+        session.AiModel = ResolveStoredAiModel(request.AiModel);
         session.SaveTranscript = request.SaveTranscript;
 
         await _db.SaveChangesAsync(ct);
@@ -175,6 +178,7 @@ public class CallSessionsController : ControllerBase
                 ResumeId = s.ResumeId,
                 Language = s.Language,
                 SimpleLanguage = s.SimpleLanguage,
+                NaturalSpeakingMode = s.NaturalSpeakingMode,
                 ExtraContext = s.ExtraContext,
                 AiModel = s.AiModel,
                 SaveTranscript = s.SaveTranscript,
@@ -510,6 +514,7 @@ public class CallSessionsController : ControllerBase
         ResumeId = s.ResumeId,
         Language = s.Language,
         SimpleLanguage = s.SimpleLanguage,
+        NaturalSpeakingMode = s.NaturalSpeakingMode,
         ExtraContext = s.ExtraContext,
         AiModel = s.AiModel,
         SaveTranscript = s.SaveTranscript,
@@ -621,6 +626,24 @@ public class CallSessionsController : ControllerBase
         await _db.SaveChangesAsync(ct);
         return new AiNotesDto { Notes = session.AiNotes, UpdatedAt = session.AiNotesUpdatedAt };
     }
+
+    /// <summary>
+    /// When the client omits a model, persist the configured Azure OpenAI deployment name (matches runtime).
+    /// </summary>
+    private string ResolveStoredAiModel(string? requestAiModel)
+    {
+        var configured = (_configuration["AzureOpenAI:DeploymentName"] ?? "gpt-4o-mini").Trim();
+        if (string.IsNullOrWhiteSpace(configured))
+            configured = "gpt-4o-mini";
+        if (configured.Length > 100)
+            configured = configured[..100];
+
+        var trimmed = (requestAiModel ?? "").Trim();
+        if (string.IsNullOrWhiteSpace(trimmed))
+            return configured;
+
+        return trimmed.Length > 100 ? trimmed[..100] : trimmed;
+    }
 }
 
 public class CreateCallSessionRequest
@@ -630,6 +653,7 @@ public class CreateCallSessionRequest
     public Guid? ResumeId { get; set; }
     public string? Language { get; set; }
     public bool SimpleLanguage { get; set; }
+    public bool? NaturalSpeakingMode { get; set; }
     public string? ExtraContext { get; set; }
     public string? AiModel { get; set; }
     public bool SaveTranscript { get; set; }
@@ -644,6 +668,7 @@ public class CallSessionDto
     public Guid? ResumeId { get; set; }
     public string Language { get; set; } = string.Empty;
     public bool SimpleLanguage { get; set; }
+    public bool NaturalSpeakingMode { get; set; }
     public string? ExtraContext { get; set; }
     public string AiModel { get; set; } = string.Empty;
     public bool SaveTranscript { get; set; }

@@ -9,6 +9,8 @@ public class CallSession
     public Guid? ResumeId { get; set; }
     public string Language { get; set; } = "English";
     public bool SimpleLanguage { get; set; }
+    /// <summary>When true, AI answers are steered toward conversational, spoken-human tone (desktop interview flow).</summary>
+    public bool NaturalSpeakingMode { get; set; }
     public string? ExtraContext { get; set; }
     public string AiModel { get; set; } = "GPT-4.1 Mini";
     public bool SaveTranscript { get; set; }

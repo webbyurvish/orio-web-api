@@ -105,7 +105,7 @@ public static class SeedData
         for (var i = 0; i < footerCategories.Length; i++)
             db.FooterLinks.Add(new FooterLink { Id = Guid.NewGuid(), Category = footerCategories[i].Item1, Label = footerCategories[i].Item2, Url = footerCategories[i].Item3, SortOrder = i });
 
-        var socials = new[] { ("LinkedIn", "https://linkedin.com"), ("Twitter", "https://twitter.com"), ("Facebook", "https://facebook.com"), ("Instagram", "https://instagram.com") };
+        var socials = new[] { ("LinkedIn", "https://linkedin.com"), ("Twitter", "https://x.com/smeedai"), ("Facebook", "https://facebook.com"), ("Instagram", "https://www.instagram.com/smeedai") };
         for (var i = 0; i < socials.Length; i++)
             db.SocialLinks.Add(new SocialLink { Id = Guid.NewGuid(), Platform = socials[i].Item1, Url = socials[i].Item2, SortOrder = i });
 

@@ -160,6 +160,9 @@ namespace PKeetDashboard.API.Migrations
                     b.Property<bool>("SimpleLanguage")
                         .HasColumnType("bit");
 
+                    b.Property<bool>("NaturalSpeakingMode")
+                        .HasColumnType("bit");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(50)
