@@ -20,7 +20,7 @@ public class JwtService
     public string GenerateToken(User user)
     {
         var jwt = _configuration.GetSection("JwtSettings");
-        var secretKey = (jwt["SecretKey"] ?? "YourSuperSecretKeyThatShouldBeAtLeast32CharactersLong!").Trim();
+        var secretKey = (jwt["SecretKey"] ?? "").Trim();
         if (Encoding.UTF8.GetByteCount(secretKey) < 32)
             throw new InvalidOperationException(
                 "JwtSettings:SecretKey must be at least 32 UTF-8 bytes for HS256. Lengthen JwtSettings__SecretKey in your environment.");

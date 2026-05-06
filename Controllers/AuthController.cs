@@ -3,6 +3,7 @@ using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using PKeetDashboard.API.DTOs;
 using PKeetDashboard.API.Services;
+using Microsoft.AspNetCore.RateLimiting;
 
 namespace PKeetDashboard.API.Controllers;
 
@@ -23,6 +24,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("register")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(AuthResponse), 200)]
     [ProducesResponseType(400)]
     public async Task<ActionResult<AuthResponse>> Register([FromBody] RegisterRequest request)
@@ -44,6 +46,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("register/initiate")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(204)]
     [ProducesResponseType(400)]
     public async Task<IActionResult> RegisterInitiate([FromBody] RegisterInitiateRequest request)
@@ -65,6 +68,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("register/verify")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(AuthResponse), 200)]
     [ProducesResponseType(400)]
     public async Task<ActionResult<AuthResponse>> RegisterVerify([FromBody] RegisterVerifyRequest request)
@@ -86,6 +90,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("login")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(AuthResponse), 200)]
     [ProducesResponseType(401)]
     public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
@@ -106,6 +111,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("google-login")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(AuthResponse), 200)]
     [ProducesResponseType(401)]
     public async Task<ActionResult<AuthResponse>> GoogleLogin([FromBody] GoogleLoginRequest request)
@@ -139,7 +145,7 @@ public class AuthController : ControllerBase
     public async Task<ActionResult<UserDto>> Me()
     {
         _logger.LogInformation("WEB-AUTH me request authorized={Authorized}", User?.Identity?.IsAuthenticated == true);
-        var userId = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+        var userId = User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userId))
             return Unauthorized();
 
@@ -208,6 +214,7 @@ public class AuthController : ControllerBase
 
     [HttpPost("exchange")]
     [AllowAnonymous]
+    [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(DesktopAuthExchangeResponse), 200)]
     [ProducesResponseType(400)]
     public ActionResult<DesktopAuthExchangeResponse> ExchangeDesktopCode([FromBody] DesktopAuthExchangeRequest request)

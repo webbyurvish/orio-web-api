@@ -32,3 +32,6 @@ TestResults/
 
 # Accidental local publish / compile-check output (never commit)
 bin-compile-check/
+
+# Azure publish profiles (contain credentials)
+*.PublishSettings
