@@ -23,6 +23,9 @@ public class CallSessionsController : ControllerBase
     private readonly IConfiguration _configuration;
     private readonly ILogger<CallSessionsController> _logger;
     private readonly IAnalyticsRecorder _analytics;
+    private static readonly TimeSpan FreeSessionDuration = TimeSpan.FromMinutes(10);
+    private static readonly TimeSpan FreeSessionCooldown = TimeSpan.FromMinutes(15);
+    private const decimal CreditsPerHour = 1.0m; // 60 minutes = 1 credit
 
     public CallSessionsController(AppDbContext db, IConfiguration configuration, ILogger<CallSessionsController> logger, IAnalyticsRecorder analytics)
     {
@@ -41,6 +44,61 @@ public class CallSessionsController : ControllerBase
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (string.IsNullOrEmpty(userIdStr) || !Guid.TryParse(userIdStr, out var userId))
             return Unauthorized();
+
+        // Enforce free-session cooldown: after a free session ends/expires, user must wait 15 minutes
+        // before creating another free session.
+        if (request.IsFreeSession)
+        {
+            var now = DateTime.UtcNow;
+
+            // Prevent stockpiling free sessions: only allow one pending free session at a time,
+            // and don't allow creating a new free session while another free one is active.
+            var hasPendingOrActiveFree = await _db.CallSessions
+                .AsNoTracking()
+                .AnyAsync(s =>
+                    s.UserId == userId &&
+                    s.IsFreeSession &&
+                    (
+                        (s.Status ?? "").Trim().ToLower() == "not activated" ||
+                        (
+                            (s.Status ?? "").Trim().ToLower() == "active" &&
+                            (!s.EndsAt.HasValue || s.EndsAt.Value > now)
+                        )
+                    ),
+                    ct);
+
+            if (hasPendingOrActiveFree)
+            {
+                return Conflict(new { message = "You already have a free session that is not activated or currently active." });
+            }
+
+            var lastEndedFree = await _db.CallSessions
+                .AsNoTracking()
+                .Where(s =>
+                    s.UserId == userId &&
+                    s.IsFreeSession &&
+                    s.EndsAt.HasValue &&
+                    (s.Status ?? "").Trim().ToLower() != "not activated" &&
+                    s.EndsAt.Value <= now)
+                .OrderByDescending(s => s.EndsAt)
+                .Select(s => s.EndsAt)
+                .FirstOrDefaultAsync(ct);
+
+            if (lastEndedFree.HasValue)
+            {
+                var nextAllowedAt = lastEndedFree.Value.Add(FreeSessionCooldown);
+                if (now < nextAllowedAt)
+                {
+                    var retryAfterSeconds = (int)Math.Ceiling((nextAllowedAt - now).TotalSeconds);
+                    Response.Headers["Retry-After"] = retryAfterSeconds.ToString();
+                    return StatusCode(429, new
+                    {
+                        message = "Please wait before creating another free session.",
+                        nextAllowedAtUtc = nextAllowedAt
+                    });
+                }
+            }
+        }
 
         var session = new CallSession
         {
@@ -295,28 +353,21 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
-        // Charge credits for paid sessions on activation window start: 30 mins = 0.5 credits.
-        if (!session.IsFreeSession)
-        {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-            if (user == null) return Unauthorized();
-            const decimal cost = 0.5m;
-            if (user.CallCredits < cost)
-                return StatusCode(402, new { message = "Insufficient call credits. Please purchase more credits to start a real session." });
-            user.CallCredits -= cost;
-            session.CreditsCharged += cost;
-        }
+        // New rule: usage-based billing. Do NOT charge on activate.
+        // If the session already ended, require a new session instead of re-activating.
+        if ((session.Status ?? "").Trim().Equals("Ended", StringComparison.OrdinalIgnoreCase))
+            return Conflict(new { message = "This session has ended. Please create a new session to start again." });
 
-        // If already ended, allow re-activate by starting a new window from now.
         session.Status = "Active";
-        var minutes = session.IsFreeSession ? 2 : 30;
-        session.EndsAt = DateTime.UtcNow.AddMinutes(minutes);
+        session.ActivatedAtUtc = DateTime.UtcNow;
+        // EndsAt is no longer used for billing; keep it null for active sessions.
+        session.EndsAt = null;
         await _db.SaveChangesAsync(ct);
 
         await _analytics.RecordAsync(
             userId,
             AnalyticsEventTypes.SessionActivated,
-            JsonSerializer.Serialize(new { sessionId = session.Id, minutes }),
+            JsonSerializer.Serialize(new { sessionId = session.Id, mode = session.IsFreeSession ? "Free" : "Paid" }),
             "server",
             session.Id,
             ct);
@@ -338,28 +389,8 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
-        minutes = Math.Clamp(minutes, 1, 24 * 60);
-
-        // Charge credits for paid sessions: 30 mins = 0.5 credits (i.e. minutes/60).
-        if (!session.IsFreeSession)
-        {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-            if (user == null) return Unauthorized();
-            var cost = Math.Round((decimal)minutes / 60m, 2, MidpointRounding.AwayFromZero);
-            if (cost > 0)
-            {
-                if (user.CallCredits < cost)
-                    return StatusCode(402, new { message = "Insufficient call credits to extend the session." });
-                user.CallCredits -= cost;
-                session.CreditsCharged += cost;
-            }
-        }
-
-        session.Status = "Active";
-        var baseTime = session.EndsAt.HasValue && session.EndsAt.Value > DateTime.UtcNow ? session.EndsAt.Value : DateTime.UtcNow;
-        session.EndsAt = baseTime.AddMinutes(minutes);
-        await _db.SaveChangesAsync(ct);
-        return Ok(MapToDto(session, null));
+        // Extensions are no longer applicable with usage-based billing.
+        return BadRequest(new { message = "Sessions no longer use extensions. Billing is based on minutes used when you end the session." });
     }
 
     [HttpPost("{id:guid}/end")]
@@ -376,6 +407,26 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
+        // Usage-based billing: charge on end based on activated duration.
+        if (!session.IsFreeSession)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null) return Unauthorized();
+
+            var start = session.ActivatedAtUtc ?? session.CreatedAt;
+            var minutesUsed = Math.Max(0, (DateTime.UtcNow - start).TotalMinutes);
+            // Credits: minutes / 60, rounded to 2 decimals.
+            var cost = Math.Round((decimal)minutesUsed / 60m * CreditsPerHour, 2, MidpointRounding.AwayFromZero);
+
+            if (cost > 0)
+            {
+                // Never go negative; if user has less than cost, charge what remains.
+                var charged = Math.Min(user.CallCredits, cost);
+                user.CallCredits -= charged;
+                session.CreditsCharged += charged;
+            }
+        }
+
         session.Status = "Ended";
         session.EndsAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -383,7 +434,13 @@ public class CallSessionsController : ControllerBase
         await _analytics.RecordAsync(
             userId,
             AnalyticsEventTypes.SessionEnded,
-            JsonSerializer.Serialize(new { sessionId = session.Id, aiUsage = session.AiUsage, minutes = (session.EndsAt!.Value - session.CreatedAt).TotalMinutes }),
+            JsonSerializer.Serialize(new
+            {
+                sessionId = session.Id,
+                aiUsage = session.AiUsage,
+                minutes = (session.EndsAt!.Value - (session.ActivatedAtUtc ?? session.CreatedAt)).TotalMinutes,
+                creditsCharged = session.CreditsCharged
+            }),
             "server",
             session.Id,
             ct);

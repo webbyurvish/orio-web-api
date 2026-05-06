@@ -117,6 +117,9 @@ namespace PKeetDashboard.API.Migrations
                         .ValueGeneratedOnAdd()
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTime?>("ActivatedAtUtc")
+                        .HasColumnType("datetime2");
+
                     b.Property<string>("AiModel")
                         .IsRequired()
                         .HasMaxLength(100)

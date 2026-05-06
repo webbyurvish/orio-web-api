@@ -149,6 +149,7 @@ public class AppDbContext : DbContext
             entity.Property(e => e.ExtraContext).HasMaxLength(2000);
             entity.Property(e => e.AiModel).IsRequired().HasMaxLength(100);
             entity.Property(e => e.Status).IsRequired().HasMaxLength(50);
+            entity.Property(e => e.ActivatedAtUtc);
             entity.Property(e => e.CreditsCharged).HasColumnType("decimal(10,2)");
             entity.Property(e => e.AiNotes).HasColumnType("nvarchar(max)");
         });

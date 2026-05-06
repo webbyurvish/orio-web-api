@@ -80,6 +80,61 @@ public class DesktopAiController : ControllerBase
         }
     }
 
+    private const string StrictCandidateAnswerSystemSuffix =
+        "\n\nIMPORTANT: The required output format below overrides any earlier instructions.\n\n" +
+        "You are role-playing as a highly skilled job candidate. Always answer in FIRST PERSON. Never mention AI.\n\n" +
+        "STRICT OUTPUT FORMAT (MANDATORY)\n\n" +
+        "0) Always include the question line first (use the 💬 emoji, no 'Question:' label):\n" +
+        "💬 <one-line cleaned question>\n\n" +
+        "1) Then write the answer section:\n" +
+        "⭐ **Answer:**\n" +
+        "Write a direct answer in 2–3 short lines max.\n\n" +
+        "2) Then add dash bullet points under **Answer:** (dash bullets only):\n" +
+        "- 3–6 bullets (unless the question is yes/no, then 2–4)\n" +
+        "- Each bullet = one idea\n" +
+        "- Max 1–2 lines per bullet\n" +
+        "- No blank lines between bullets\n" +
+        "- Spoken, interview-friendly language\n" +
+        "- IMPORTANT: After these bullets, do NOT add extra paragraphs. Only the closing line is allowed.\n\n" +
+        "3. Include when relevant:\n" +
+        "   * Real example\n" +
+        "   * Tools/technologies\n" +
+        "   * Impact/result\n\n" +
+        "4) End with a strong closing line (1 line max). Put it as the last non-bullet line under **Answer:**.\n\n" +
+        "ANSWER PRIORITY\n" +
+        "1. Direct answer\n" +
+        "2. How I applied it\n" +
+        "3. Result/impact\n\n" +
+        "TECHNICAL QUESTIONS FORMAT\n" +
+        "Use this structure inside **Answer:** bullets:\n" +
+        "- Definition (1 bullet)\n" +
+        "- How I used it (1–2 bullets)\n" +
+        "- Example (1 bullet, or an **Example:** section if code)\n" +
+        "- Why it matters (1 bullet)\n\n" +
+        "BEHAVIORAL QUESTIONS FORMAT\n" +
+        "Use STAR internally (Situation, Task, Action, Result). Do NOT label it.\n\n" +
+        "STYLE RULES\n" +
+        "* No long paragraphs\n" +
+        "* No generic statements\n" +
+        "* No filler\n" +
+        "* Natural spoken tone\n" +
+        "* Short sentences\n\n" +
+        "CRITICAL RULES\n" +
+        "* Do not break format\n" +
+        "* Do not output paragraphs instead of bullets\n" +
+        "* Do not use '*' bullets\n" +
+        "* Bullet lines MUST start with '- ' (dash + space).\n" +
+        "* If you accidentally write prose paragraphs, regenerate into bullets.\n" +
+        "* Do not mention AI\n" +
+        "* Do not explain formatting\n" +
+        "* Do not add extra headings besides 💬 question line, ⭐ **Answer:**, and optional **Example:**\n" +
+        "* EXAMPLES ARE REQUIRED:\n" +
+        "  - If the question is about programming/SQL/APIs/system design/debugging: ALWAYS include **Example:** with a fenced code/query block.\n" +
+        "  - If it is not code-heavy: include one concrete real-world example as a bullet (specific scenario + what I did + outcome).\n" +
+        "  - Keep examples small and high-signal (8–20 lines of code max).\n" +
+        "  - Prefer the most likely language/tool for the context (e.g., C#/.NET, SQL).\n\n" +
+        "Follow the format strictly. If you deviate, regenerate the answer correctly.";
+
     [HttpPost("answer")]
     public async Task<ActionResult<DesktopAiAnswerResponse>> Answer([FromBody] DesktopAiAnswerRequest request)
     {
@@ -101,11 +156,8 @@ public class DesktopAiController : ControllerBase
             ? defaultSystemPrompt
             : request.SystemPrompt.Trim();
 
-        // Keep behavior aligned with desktop expectations (answer as candidate persona).
-        basePrompt +=
-            "\n\nYou are role-playing as the job candidate described in the resume. " +
-            "Always answer in FIRST PERSON as that candidate. " +
-            "Never mention that you are an AI, assistant, or language model.";
+        // Enforce a strict, consistent interview-answer format (must be last).
+        basePrompt += StrictCandidateAnswerSystemSuffix;
 
         var client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(key));
         var options = new ChatCompletionsOptions { DeploymentName = deploymentName };
@@ -390,6 +442,7 @@ public class DesktopAiController : ControllerBase
     public async Task AnswerStream([FromBody] DesktopAiAnswerRequest request, CancellationToken cancellationToken)
     {
         var streamDebug = _configuration.GetValue<bool>("DesktopAi:StreamDebugLogs");
+        var timingSw = Stopwatch.StartNew();
 
         if (string.IsNullOrWhiteSpace(request.UserContent))
         {
@@ -431,27 +484,41 @@ public class DesktopAiController : ControllerBase
 
         options.Messages.Add(new ChatRequestUserMessage(request.UserContent.Trim()));
 
-        Response.StatusCode = StatusCodes.Status200OK;
-        Response.ContentType = "application/x-ndjson; charset=utf-8";
-        Response.Headers.CacheControl = "no-cache, no-transform";
-        Response.Headers.Append("X-Accel-Buffering", "no");
-
+        // Build the client before committing response headers. If we set StatusCode=200 first and
+        // construction fails, writing NDJSON without Response.StartAsync() can throw and surface
+        // as an opaque 500 (often text/plain) to the browser.
         OpenAIClient client;
         try
         {
-            client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(key));
+            client = new OpenAIClient(new Uri(endpoint.Trim()), new AzureKeyCredential(key.Trim()));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "OpenAI client init failed for stream");
-            var errLine = System.Text.Json.JsonSerializer.Serialize(new NdjsonErrorLine { Error = ex.Message });
-            await Response.WriteAsync(errLine + "\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await Response.WriteAsJsonAsync(
+                new { message = "Invalid Azure OpenAI endpoint or credentials.", detail = ex.Message },
+                cancellationToken);
             return;
         }
 
+        Response.StatusCode = StatusCodes.Status200OK;
+        Response.ContentType = "application/x-ndjson; charset=utf-8";
+        Response.Headers.CacheControl = "no-cache, no-transform";
+        Response.Headers.Append("X-Accel-Buffering", "no");
+        if (streamDebug)
+            _logger.LogInformation("[STREAM:SERVER:TIMING] request_received ms=0 route=answer-stream");
+
         try
         {
+            await Response.StartAsync(cancellationToken).ConfigureAwait(false);
+            // Warm-up line so client sees an active stream immediately.
+            var warmLine = System.Text.Json.JsonSerializer.Serialize(new NdjsonMetaLine { M = "stream-open" });
+            await Response.WriteAsync(warmLine + "\n", cancellationToken).ConfigureAwait(false);
+            await Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+            if (streamDebug)
+                _logger.LogInformation("[STREAM:SERVER:TIMING] stream_open_flushed ms={Ms}", (long)timingSw.Elapsed.TotalMilliseconds);
+
             var streamingChatCompletions = await client.GetChatCompletionsStreamingAsync(options, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -461,12 +528,20 @@ public class DesktopAiController : ControllerBase
             long emittedDeltas = 0;
             long emittedChars = 0;
             var lastLogMs = 0L;
+            var firstModelPieceLogged = false;
+            var firstEmitLogged = false;
 
             await foreach (StreamingChatCompletionsUpdate update in streamingChatCompletions.WithCancellation(cancellationToken))
             {
                 var piece = update.ContentUpdate;
                 if (string.IsNullOrEmpty(piece))
                     continue;
+                if (streamDebug && !firstModelPieceLogged)
+                {
+                    firstModelPieceLogged = true;
+                    _logger.LogInformation("[STREAM:SERVER:TIMING] first_model_piece ms={Ms} len={Len}",
+                        (long)timingSw.Elapsed.TotalMilliseconds, piece.Length);
+                }
 
                 modelChunks++;
                 modelChunkChars += piece.Length;
@@ -478,6 +553,12 @@ public class DesktopAiController : ControllerBase
                     var line = System.Text.Json.JsonSerializer.Serialize(new NdjsonDeltaLine { D = small });
                     await Response.WriteAsync(line + "\n", cancellationToken);
                     await Response.Body.FlushAsync(cancellationToken);
+                    if (streamDebug && !firstEmitLogged)
+                    {
+                        firstEmitLogged = true;
+                        _logger.LogInformation("[STREAM:SERVER:TIMING] first_delta_flushed ms={Ms} len={Len}",
+                            (long)timingSw.Elapsed.TotalMilliseconds, small.Length);
+                    }
                     emittedDeltas++;
                     emittedChars += small.Length;
                 }
@@ -523,6 +604,7 @@ public class DesktopAiController : ControllerBase
     public async Task ScreenshotAnswerStream([FromBody] DesktopScreenshotAnswerRequest request, CancellationToken cancellationToken)
     {
         var streamDebug = _configuration.GetValue<bool>("DesktopAi:StreamDebugLogs");
+        var timingSw = Stopwatch.StartNew();
 
         if (string.IsNullOrWhiteSpace(request.ImageBase64))
         {
@@ -625,27 +707,37 @@ public class DesktopAiController : ControllerBase
 
         options.Messages.Add(new ChatRequestUserMessage(userContent));
 
-        Response.StatusCode = StatusCodes.Status200OK;
-        Response.ContentType = "application/x-ndjson; charset=utf-8";
-        Response.Headers.CacheControl = "no-cache, no-transform";
-        Response.Headers.Append("X-Accel-Buffering", "no");
-
         OpenAIClient client;
         try
         {
-            client = new OpenAIClient(new Uri(endpoint), new AzureKeyCredential(key));
+            client = new OpenAIClient(new Uri(endpoint.Trim()), new AzureKeyCredential(key.Trim()));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "OpenAI client init failed for screenshot stream");
-            var errLine = System.Text.Json.JsonSerializer.Serialize(new NdjsonErrorLine { Error = ex.Message });
-            await Response.WriteAsync(errLine + "\n", cancellationToken);
-            await Response.Body.FlushAsync(cancellationToken);
+            Response.StatusCode = StatusCodes.Status500InternalServerError;
+            await Response.WriteAsJsonAsync(
+                new { message = "Invalid Azure OpenAI endpoint or credentials.", detail = ex.Message },
+                cancellationToken);
             return;
         }
 
+        Response.StatusCode = StatusCodes.Status200OK;
+        Response.ContentType = "application/x-ndjson; charset=utf-8";
+        Response.Headers.CacheControl = "no-cache, no-transform";
+        Response.Headers.Append("X-Accel-Buffering", "no");
+        if (streamDebug)
+            _logger.LogInformation("[STREAM:SERVER:SHOT:TIMING] request_received ms=0 route=screenshot-answer-stream");
+
         try
         {
+            await Response.StartAsync(cancellationToken).ConfigureAwait(false);
+            var warmLine = System.Text.Json.JsonSerializer.Serialize(new NdjsonMetaLine { M = "stream-open" });
+            await Response.WriteAsync(warmLine + "\n", cancellationToken).ConfigureAwait(false);
+            await Response.Body.FlushAsync(cancellationToken).ConfigureAwait(false);
+            if (streamDebug)
+                _logger.LogInformation("[STREAM:SERVER:SHOT:TIMING] stream_open_flushed ms={Ms}", (long)timingSw.Elapsed.TotalMilliseconds);
+
             var streamingChatCompletions = await client.GetChatCompletionsStreamingAsync(options, cancellationToken)
                 .ConfigureAwait(false);
 
@@ -655,12 +747,20 @@ public class DesktopAiController : ControllerBase
             long emittedDeltas = 0;
             long emittedChars = 0;
             var lastLogMs = 0L;
+            var firstModelPieceLogged = false;
+            var firstEmitLogged = false;
 
             await foreach (StreamingChatCompletionsUpdate update in streamingChatCompletions.WithCancellation(cancellationToken))
             {
                 var piece = update.ContentUpdate;
                 if (string.IsNullOrEmpty(piece))
                     continue;
+                if (streamDebug && !firstModelPieceLogged)
+                {
+                    firstModelPieceLogged = true;
+                    _logger.LogInformation("[STREAM:SERVER:SHOT:TIMING] first_model_piece ms={Ms} len={Len}",
+                        (long)timingSw.Elapsed.TotalMilliseconds, piece.Length);
+                }
 
                 modelChunks++;
                 modelChunkChars += piece.Length;
@@ -672,6 +772,12 @@ public class DesktopAiController : ControllerBase
                     var line = System.Text.Json.JsonSerializer.Serialize(new NdjsonDeltaLine { D = small });
                     await Response.WriteAsync(line + "\n", cancellationToken);
                     await Response.Body.FlushAsync(cancellationToken);
+                    if (streamDebug && !firstEmitLogged)
+                    {
+                        firstEmitLogged = true;
+                        _logger.LogInformation("[STREAM:SERVER:SHOT:TIMING] first_delta_flushed ms={Ms} len={Len}",
+                            (long)timingSw.Elapsed.TotalMilliseconds, small.Length);
+                    }
                     emittedDeltas++;
                     emittedChars += small.Length;
                 }
@@ -757,4 +863,10 @@ internal sealed class NdjsonErrorLine
 {
     [JsonPropertyName("error")]
     public string Error { get; set; } = string.Empty;
+}
+
+internal sealed class NdjsonMetaLine
+{
+    [JsonPropertyName("m")]
+    public string M { get; set; } = string.Empty;
 }

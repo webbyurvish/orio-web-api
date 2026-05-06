@@ -16,6 +16,10 @@ public class CallSession
     public bool SaveTranscript { get; set; }
     public bool IsFreeSession { get; set; } = true;
     public string Status { get; set; } = "Not Activated";   // Not Activated, Expired, etc.
+    /// <summary>
+    /// When the session was activated (started) by the user (UTC). Used for usage-based billing.
+    /// </summary>
+    public DateTime? ActivatedAtUtc { get; set; }
     public DateTime? EndsAt { get; set; }
     public DateTime CreatedAt { get; set; }
     public int AiUsage { get; set; }

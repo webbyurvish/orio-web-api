@@ -17,6 +17,7 @@ public class AuthService
     private readonly IConfiguration _config;
     private readonly IEmailSender _emailSender;
     private readonly IAnalyticsRecorder _analytics;
+    private const decimal FirstSignupFreeCredits = 1m;
 
     public AuthService(AppDbContext db, JwtService jwt, IConfiguration config, IEmailSender emailSender, IAnalyticsRecorder analytics)
     {
@@ -53,8 +54,7 @@ public class AuthService
             CreatedAt = DateTime.UtcNow,
             UpdatedAt = DateTime.UtcNow,
             IsActive = true,
-            // Credits start at 0; users must purchase credits.
-            CallCredits = 0m
+            CallCredits = FirstSignupFreeCredits
         };
 
         _db.Users.Add(user);
@@ -145,7 +145,8 @@ public class AuthService
                 IsEmailVerified = true,
                 CreatedAt = DateTime.UtcNow,
                 UpdatedAt = DateTime.UtcNow,
-                IsActive = true
+                IsActive = true,
+                CallCredits = FirstSignupFreeCredits
             };
             _db.Users.Add(user);
             await _db.SaveChangesAsync();
@@ -285,7 +286,7 @@ public class AuthService
             CreatedAt = now,
             UpdatedAt = now,
             IsActive = true,
-            CallCredits = 0m
+            CallCredits = FirstSignupFreeCredits
         };
 
         _db.Users.Add(user);
@@ -328,6 +329,23 @@ public class AuthService
     private async Task<UserDto> MapToDtoAsync(User u)
     {
         var hasDiscovery = await _db.UserDiscoveryResponses.AnyAsync(x => x.UserId == u.Id);
+        // Unlimited access is derived from purchase receipts. This is a lightweight entitlement signal for clients
+        // (desktop overlay especially) so they don't block users with lifetime/subscription purchases just because
+        // their credit balance is zero.
+        var planDisplay = await _db.StripePaymentReceipts.AsNoTracking()
+            .Where(r => r.UserId == u.Id && (r.ProductId == "lifetime" || r.ProductId == "sub_monthly" || r.ProductId == "sub_yearly"))
+            .OrderByDescending(r => r.CreatedAt)
+            .Select(r => r.ProductId)
+            .FirstOrDefaultAsync();
+
+        var unlimited = !string.IsNullOrEmpty(planDisplay);
+        var planLabel = planDisplay switch
+        {
+            "lifetime" => "Lifetime",
+            "sub_monthly" => "Monthly",
+            "sub_yearly" => "Yearly",
+            _ => null
+        };
         return new UserDto
         {
             Id = u.Id,
@@ -337,6 +355,8 @@ public class AuthService
             ProfilePictureUrl = u.ProfilePictureUrl,
             IsEmailVerified = u.IsEmailVerified,
             CallCredits = u.CallCredits,
+            UnlimitedAccess = unlimited,
+            PlanDisplay = planLabel,
             HasDiscoveryResponse = hasDiscovery,
             IsAdmin = u.IsAdmin
         };
