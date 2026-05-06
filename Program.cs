@@ -194,32 +194,7 @@ app.UseForwardedHeaders();
 
 app.UseSecurityHardening(app.Configuration, app.Environment);
 
-// Swagger is enabled in all environments, but access is restricted.
-app.UseWhen(
-    ctx => ctx.Request.Path.StartsWithSegments("/swagger", StringComparison.OrdinalIgnoreCase),
-    swaggerApp =>
-    {
-        swaggerApp.UseAuthentication();
-        swaggerApp.UseAuthorization();
-        swaggerApp.Use(async (ctx, next) =>
-        {
-            if (ctx.User?.Identity?.IsAuthenticated != true)
-            {
-                await ctx.ChallengeAsync();
-                return;
-            }
-
-            // Keep Swagger restricted to admins only (prevents accidental production exposure).
-            if (!ctx.User.HasClaim("is_admin", "true"))
-            {
-                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
-                return;
-            }
-
-            await next();
-        });
-    });
-
+// Swagger is enabled in all environments.
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
