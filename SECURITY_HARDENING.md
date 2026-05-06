@@ -47,6 +47,12 @@ Implemented using ASP.NET Core rate limiting (token bucket + sliding window):
 ### Swagger exposure controls
 - Swagger is now **Development-only** by default to avoid accidental production exposure.
 
+### Data Protection key encryption (prevents unencrypted key persistence)
+- Configured ASP.NET Core Data Protection to:
+  - Persist keys to a **writable location** (`HOME/data-protection-keys` on Azure App Service)
+  - Encrypt key material at rest using **DPAPI on Windows**
+- **Scale-out note**: for multiple instances, configure shared key storage (Azure Blob) and key encryption (Azure Key Vault).
+
 ## Configuration reference
 
 Add a `Security` section (example in `appsettings.json`):

@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -20,6 +21,23 @@ if (string.IsNullOrEmpty(connectionString))
     throw new InvalidOperationException("Connection string 'DefaultConnection' is not configured.");
 
 builder.Services.AddSecurityHardening(builder.Configuration, builder.Environment);
+
+// Data Protection hardening:
+// - Prevents "No XML encryptor configured" warnings
+// - Ensures keys aren't persisted unencrypted (DPAPI on Windows)
+// - Persists keys to a writable location on Azure App Service (HOME)
+var home = Environment.GetEnvironmentVariable("HOME");
+var keyRingPath = !string.IsNullOrWhiteSpace(home)
+    ? Path.Combine(home, "data-protection-keys")
+    : Path.Combine(builder.Environment.ContentRootPath, "data-protection-keys");
+
+var dp = builder.Services.AddDataProtection()
+    .PersistKeysToFileSystem(new DirectoryInfo(keyRingPath));
+
+if (OperatingSystem.IsWindows())
+{
+    dp.ProtectKeysWithDpapi();
+}
 
 var maxBodyBytes = builder.Configuration.GetValue<long?>("Security:MaxRequestBodyBytes");
 builder.WebHost.ConfigureKestrel(options =>
@@ -122,12 +140,13 @@ builder.Services.AddHttpClient("ComputerVision", client =>
     options.Retry.MaxRetryAttempts = 2;
     options.Retry.UseJitter = true;
 
+    // NOTE: sampling duration must be >= 2x attempt timeout (validated at startup).
     options.CircuitBreaker.SamplingDuration = TimeSpan.FromSeconds(30);
     options.CircuitBreaker.MinimumThroughput = 20;
     options.CircuitBreaker.FailureRatio = 0.5;
     options.CircuitBreaker.BreakDuration = TimeSpan.FromSeconds(15);
 
-    options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(20);
+    options.AttemptTimeout.Timeout = TimeSpan.FromSeconds(10);
     options.TotalRequestTimeout.Timeout = TimeSpan.FromSeconds(60);
 });
 builder.Services.AddSingleton<ComputerVisionOcrService>();
