@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http.Timeouts;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.EntityFrameworkCore;
@@ -193,15 +194,38 @@ app.UseForwardedHeaders();
 
 app.UseSecurityHardening(app.Configuration, app.Environment);
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c =>
+// Swagger is enabled in all environments, but access is restricted.
+app.UseWhen(
+    ctx => ctx.Request.Path.StartsWithSegments("/swagger", StringComparison.OrdinalIgnoreCase),
+    swaggerApp =>
     {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Smeed AI User Dashboard API v1");
-        c.RoutePrefix = "swagger"; // Swagger UI at https://localhost:5050/swagger
+        swaggerApp.UseAuthentication();
+        swaggerApp.UseAuthorization();
+        swaggerApp.Use(async (ctx, next) =>
+        {
+            if (ctx.User?.Identity?.IsAuthenticated != true)
+            {
+                await ctx.ChallengeAsync();
+                return;
+            }
+
+            // Keep Swagger restricted to admins only (prevents accidental production exposure).
+            if (!ctx.User.HasClaim("is_admin", "true"))
+            {
+                ctx.Response.StatusCode = StatusCodes.Status403Forbidden;
+                return;
+            }
+
+            await next();
+        });
     });
-}
+
+app.UseSwagger();
+app.UseSwaggerUI(c =>
+{
+    c.SwaggerEndpoint("/swagger/v1/swagger.json", "Smeed AI User Dashboard API v1");
+    c.RoutePrefix = "swagger";
+});
 
 
 app.UseCors("AllowDashboard");

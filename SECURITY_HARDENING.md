@@ -45,7 +45,9 @@ Implemented using ASP.NET Core rate limiting (token bucket + sliding window):
 - Best-effort removal of fingerprinting headers.
 
 ### Swagger exposure controls
-- Swagger is now **Development-only** by default to avoid accidental production exposure.
+- Swagger is enabled in **all environments**, but is **restricted to authenticated admin users**:
+  - Both `/swagger` (UI) and `/swagger/v1/swagger.json` are protected.
+  - Requires JWT auth and `is_admin=true` (same as the `AdminOnly` policy intent).
 
 ### Data Protection key encryption (prevents unencrypted key persistence)
 - Configured ASP.NET Core Data Protection to:
