@@ -93,9 +93,15 @@ public class AuthController : ControllerBase
     [EnableRateLimiting("AuthSensitive")]
     [ProducesResponseType(typeof(AuthResponse), 200)]
     [ProducesResponseType(401)]
-    public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest request)
+    public async Task<ActionResult<AuthResponse>> Login([FromBody] LoginRequest? request)
     {
-        _logger.LogInformation("WEB-AUTH login attempt email={Email} ip={Ip}", request.Email, HttpContext.Connection.RemoteIpAddress?.ToString());
+        if (request is null)
+            return BadRequest(new { message = "Request body is required." });
+
+        _logger.LogInformation(
+            "WEB-AUTH login attempt email={Email} ip={Ip}",
+            request.Email,
+            HttpContext.Connection.RemoteIpAddress?.ToString());
         try
         {
             var response = await _authService.LoginAsync(request);

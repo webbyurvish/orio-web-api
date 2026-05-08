@@ -67,6 +67,12 @@ public class AuthService
 
     public async Task<AuthResponse> LoginAsync(LoginRequest req)
     {
+        if (req == null)
+            throw new UnauthorizedAccessException("Invalid email or password.");
+
+        if (string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Password))
+            throw new UnauthorizedAccessException("Invalid email or password.");
+
         var normalizedEmail = req.Email.Trim().ToLowerInvariant();
         var user = await _db.Users.FirstOrDefaultAsync(u => u.Email == normalizedEmail);
         if (user == null)
@@ -75,8 +81,20 @@ public class AuthService
         if (user.PasswordHash == null)
             throw new UnauthorizedAccessException("This account uses Google sign-in. Please sign in with Google.");
 
-        if (!BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
+        try
+        {
+            if (!BCrypt.Net.BCrypt.Verify(req.Password, user.PasswordHash))
+                throw new UnauthorizedAccessException("Invalid email or password.");
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Corrupt hash / unexpected bcrypt payload: do not leak details; treat as bad credentials.
             throw new UnauthorizedAccessException("Invalid email or password.");
+        }
 
         if (!user.IsActive)
             throw new UnauthorizedAccessException("Account is inactive.");
