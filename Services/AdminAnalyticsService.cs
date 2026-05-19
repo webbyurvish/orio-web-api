@@ -47,18 +47,18 @@ public sealed class AdminAnalyticsService
             .Where(s => s.CreatedAt >= fromUtc && s.CreatedAt <= toUtc)
             .SumAsync(s => (long)s.AiUsage, ct);
 
-        var revenueCents = await _db.StripePaymentReceipts.AsNoTracking()
-            .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc && r.AmountUsdCents.HasValue)
-            .SumAsync(r => r.AmountUsdCents ?? 0, ct);
-        var revenueUsd = revenueCents / 100m;
+        var revenuePaise = await _db.PaymentReceipts.AsNoTracking()
+            .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc && r.AmountInrPaise.HasValue)
+            .SumAsync(r => r.AmountInrPaise ?? 0, ct);
+        var revenueInr = revenuePaise / 100m;
 
         var mrrWindowStart = today.AddDays(-30);
-        var subMonthlyCents = await _db.StripePaymentReceipts.AsNoTracking()
-            .Where(r => r.CreatedAt >= mrrWindowStart && r.ProductId == "sub_monthly" && r.AmountUsdCents.HasValue)
-            .SumAsync(r => r.AmountUsdCents ?? 0, ct);
-        var mrrEstimate = subMonthlyCents / 100m;
+        var subMonthlyPaise = await _db.PaymentReceipts.AsNoTracking()
+            .Where(r => r.CreatedAt >= mrrWindowStart && r.ProductId == "sub_monthly" && r.AmountInrPaise.HasValue)
+            .SumAsync(r => r.AmountInrPaise ?? 0, ct);
+        var mrrEstimate = subMonthlyPaise / 100m;
 
-        var usersWithPayment = await _db.StripePaymentReceipts.AsNoTracking()
+        var usersWithPayment = await _db.PaymentReceipts.AsNoTracking()
             .Select(r => r.UserId).Distinct().CountAsync(ct);
         var signupToPaid = totalUsers > 0 ? 100.0 * usersWithPayment / totalUsers : 0;
 
@@ -77,7 +77,7 @@ public sealed class AdminAnalyticsService
                 SessionsInRange = sessionsInRange,
                 AvgSessionMinutes = avgMinutes,
                 TotalAiAnswers = (int)Math.Min(aiAnswers, int.MaxValue),
-                RevenueUsdInRange = revenueUsd,
+                RevenueUsdInRange = revenueInr,
                 MrrUsdEstimate = mrrEstimate,
                 SignupToPaidConversionPercent = signupToPaid
             },
@@ -159,10 +159,10 @@ public sealed class AdminAnalyticsService
 
     private async Task<List<AdminTimeSeriesPointDto>> DailySeriesRevenueAsync(DateTime fromUtc, DateTime toUtc, CancellationToken ct)
     {
-        var list = await _db.StripePaymentReceipts.AsNoTracking()
-            .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc && r.AmountUsdCents.HasValue)
+        var list = await _db.PaymentReceipts.AsNoTracking()
+            .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc && r.AmountInrPaise.HasValue)
             .GroupBy(r => new { r.CreatedAt.Year, r.CreatedAt.Month, r.CreatedAt.Day })
-            .Select(g => new { g.Key.Year, g.Key.Month, g.Key.Day, Sum = g.Sum(x => x.AmountUsdCents ?? 0) })
+            .Select(g => new { g.Key.Year, g.Key.Month, g.Key.Day, Sum = g.Sum(x => x.AmountInrPaise ?? 0) })
             .OrderBy(x => x.Year).ThenBy(x => x.Month).ThenBy(x => x.Day)
             .ToListAsync(ct);
         return list.Select(x => new AdminTimeSeriesPointDto
@@ -224,7 +224,7 @@ public sealed class AdminAnalyticsService
         fromUtc = DateTime.SpecifyKind(fromUtc, DateTimeKind.Utc);
         toUtc = DateTime.SpecifyKind(toUtc, DateTimeKind.Utc);
 
-        var receipts = await _db.StripePaymentReceipts.AsNoTracking()
+        var receipts = await _db.PaymentReceipts.AsNoTracking()
             .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc)
             .ToListAsync(ct);
 
@@ -232,15 +232,15 @@ public sealed class AdminAnalyticsService
         var payingUsers = receipts.Select(r => r.UserId).Distinct().Count();
         var mostPopular = byProduct.OrderByDescending(kv => kv.Value).FirstOrDefault();
         var totalUsers = await _db.Users.AsNoTracking().CountAsync(ct);
-        var revenueCents = receipts.Where(r => r.AmountUsdCents.HasValue).Sum(r => r.AmountUsdCents!.Value);
-        var distinctPayingEver = await _db.StripePaymentReceipts.AsNoTracking()
+        var revenueCents = receipts.Where(r => r.AmountInrPaise.HasValue).Sum(r => r.AmountInrPaise!.Value);
+        var distinctPayingEver = await _db.PaymentReceipts.AsNoTracking()
             .Select(r => r.UserId).Distinct().CountAsync(ct);
 
         var today = DateTime.UtcNow.Date;
         var mrrWindowStart = today.AddDays(-30);
-        var subMonthlyCents = await _db.StripePaymentReceipts.AsNoTracking()
-            .Where(r => r.CreatedAt >= mrrWindowStart && r.ProductId == "sub_monthly" && r.AmountUsdCents.HasValue)
-            .SumAsync(r => r.AmountUsdCents ?? 0, ct);
+        var subMonthlyCents = await _db.PaymentReceipts.AsNoTracking()
+            .Where(r => r.CreatedAt >= mrrWindowStart && r.ProductId == "sub_monthly" && r.AmountInrPaise.HasValue)
+            .SumAsync(r => r.AmountInrPaise ?? 0, ct);
 
         return new AdminSubscriptionSummaryDto
         {
@@ -353,7 +353,7 @@ public sealed class AdminAnalyticsService
             .Select(s => s.UserId).Distinct().CountAsync(ct);
         var activated = await _db.AnalyticsEvents.AsNoTracking()
             .CountAsync(e => e.EventType == AnalyticsEventTypes.SessionActivated && e.CreatedAtUtc >= fromUtc && e.CreatedAtUtc <= toUtc, ct);
-        var paid = await _db.StripePaymentReceipts.AsNoTracking()
+        var paid = await _db.PaymentReceipts.AsNoTracking()
             .Where(r => r.CreatedAt >= fromUtc && r.CreatedAt <= toUtc)
             .Select(r => r.UserId).Distinct().CountAsync(ct);
 

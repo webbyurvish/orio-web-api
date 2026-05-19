@@ -350,7 +350,7 @@ public class AuthService
         // Unlimited access is derived from purchase receipts. This is a lightweight entitlement signal for clients
         // (desktop overlay especially) so they don't block users with lifetime/subscription purchases just because
         // their credit balance is zero.
-        var planDisplay = await _db.StripePaymentReceipts.AsNoTracking()
+        var planDisplay = await _db.PaymentReceipts.AsNoTracking()
             .Where(r => r.UserId == u.Id && (r.ProductId == "lifetime" || r.ProductId == "sub_monthly" || r.ProductId == "sub_yearly"))
             .OrderByDescending(r => r.CreatedAt)
             .Select(r => r.ProductId)

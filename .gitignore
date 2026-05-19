@@ -33,5 +33,8 @@ TestResults/
 # Accidental local publish / compile-check output (never commit)
 bin-compile-check/
 
+# Runtime ASP.NET Data Protection keys (per environment)
+data-protection-keys/
+
 # Azure publish profiles (contain credentials)
 *.PublishSettings

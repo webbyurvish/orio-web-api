@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.DataProtection;
@@ -122,7 +123,13 @@ builder.Services.AddCors(options =>
     });
 });
 
-builder.Services.Configure<StripeOptions>(builder.Configuration.GetSection(StripeOptions.SectionName));
+builder.Services.Configure<RazorpayOptions>(builder.Configuration.GetSection(RazorpayOptions.SectionName));
+builder.Services.AddHttpClient<RazorpayApiClient>(client =>
+{
+    client.BaseAddress = new Uri("https://api.razorpay.com/");
+    client.Timeout = TimeSpan.FromSeconds(30);
+});
+builder.Services.AddScoped<PaymentFulfillmentService>();
 builder.Services.Configure<SmtpOptions>(builder.Configuration.GetSection(SmtpOptions.SectionName));
 builder.Services.AddScoped<JwtService>();
 builder.Services.AddScoped<IAnalyticsRecorder, AnalyticsRecorder>();
@@ -166,11 +173,21 @@ builder.Services.AddValidatorsFromAssemblyContaining<LoginRequestValidator>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(c =>
 {
-    c.SwaggerDoc("v1", new OpenApiInfo { Title = "Smeed AI User Dashboard API", Version = "v1" });
+    c.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Smeed AI User Dashboard API",
+        Version = "v1",
+        Description =
+            "REST API for the Smeed AI web dashboard, desktop interview client, and public marketing site. " +
+            "Most routes require a JWT in the `Authorization` header (`Bearer <token>`). " +
+            "Anonymous routes include auth login/register, desktop code exchange, and public landing content."
+    });
+    c.OperationFilter<PKeetDashboard.API.Swagger.ApiDocumentationOperationFilter>();
+    c.DocumentFilter<PKeetDashboard.API.Swagger.ApiTagDescriptionsDocumentFilter>();
     c.OperationFilter<PKeetDashboard.API.Swagger.MultipartFormFileOperationFilter>();
     c.AddSecurityDefinition("Bearer", new OpenApiSecurityScheme
     {
-        Description = "JWT: Bearer <token>",
+        Description = "JWT authorization header using the Bearer scheme. Example: `Bearer {token}`",
         Name = "Authorization",
         In = ParameterLocation.Header,
         Type = SecuritySchemeType.ApiKey,
@@ -186,6 +203,11 @@ builder.Services.AddSwaggerGen(c =>
             Array.Empty<string>()
         }
     });
+
+    var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
+    var xmlPath = Path.Combine(AppContext.BaseDirectory, xmlFile);
+    if (File.Exists(xmlPath))
+        c.IncludeXmlComments(xmlPath);
 });
 
 var app = builder.Build();
@@ -200,6 +222,9 @@ app.UseSwaggerUI(c =>
 {
     c.SwaggerEndpoint("/swagger/v1/swagger.json", "Smeed AI User Dashboard API v1");
     c.RoutePrefix = "swagger";
+    c.DocumentTitle = "Smeed AI API";
+    c.DisplayRequestDuration();
+    c.DocExpansion(Swashbuckle.AspNetCore.SwaggerUI.DocExpansion.List);
 });
 
 

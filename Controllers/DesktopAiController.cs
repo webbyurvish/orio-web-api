@@ -665,14 +665,16 @@ public class DesktopAiController : ControllerBase
         }
 
         var userContent =
-            "The following text was extracted from a screenshot of the user's screen (interview, IDE, browser, shared document, etc.) using OCR. Spelling or line breaks may be imperfect.\n\n" +
+            "The following text was extracted from the user's screen via OCR. Line order and spelling may be wrong; reconstruct the real question(s) before answering.\n\n" +
             "---\n" +
             ocrText.Trim() +
             "\n---\n\n" +
-            "1) Decide whether there is an interview question, coding problem, multiple-choice question, system-design prompt, or similar that the candidate should answer.\n" +
-            "2) If yes: briefly restate the question, then give a concise, natural, interview-ready answer in FIRST PERSON as the candidate. For coding questions: provide a correct solution and a short explanation.\n" +
-            "3) If there is no clear question: explain briefly what the text seems to be and that you did not find an answerable interview question.\n" +
-            "Keep the response easy to read aloud.";
+            "Tasks:\n" +
+            "1) Identify any interview question, coding problem (including LeetCode-style), MCQ, SQL task, system-design prompt, or debugging scenario the candidate must answer now.\n" +
+            "2) If found: answer as the candidate using ONLY the required format in your system instructions (💬 question line, ⭐ **Answer:** with dash bullets, examples/code when relevant).\n" +
+            "3) For coding problems: provide a correct complete solution in a fenced code block under **Example:**, plus short spoken bullets explaining approach, complexity, and edge cases.\n" +
+            "4) If nothing answerable: use the standard format with a 💬 line stating no clear question was detected, then ⭐ **Answer:** bullets explaining what the OCR seems to show and what the user should capture instead.\n" +
+            "Do not answer in plain paragraphs. Follow the system prompt format strictly.";
 
         var endpoint = _configuration["AzureOpenAI:Endpoint"];
         var key = _configuration["AzureOpenAI:Key"];

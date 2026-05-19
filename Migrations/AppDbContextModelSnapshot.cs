@@ -594,7 +594,7 @@ namespace PKeetDashboard.API.Migrations
                     b.ToTable("SocialLinks");
                 });
 
-            modelBuilder.Entity("PKeetDashboard.API.Entities.StripePaymentReceipt", b =>
+            modelBuilder.Entity("PKeetDashboard.API.Entities.PaymentReceipt", b =>
                 {
                     b.Property<Guid>("Id")
                         .ValueGeneratedOnAdd()
@@ -603,7 +603,7 @@ namespace PKeetDashboard.API.Migrations
                     b.Property<DateTime>("CreatedAt")
                         .HasColumnType("datetime2");
 
-                    b.Property<long?>("AmountUsdCents")
+                    b.Property<long?>("AmountInrPaise")
                         .HasColumnType("bigint");
 
                     b.Property<decimal>("CreditsApplied")
@@ -618,8 +618,12 @@ namespace PKeetDashboard.API.Migrations
                         .HasMaxLength(100)
                         .HasColumnType("nvarchar(100)");
 
-                    b.Property<string>("StripeSessionId")
+                    b.Property<string>("RazorpayOrderId")
                         .IsRequired()
+                        .HasMaxLength(200)
+                        .HasColumnType("nvarchar(200)");
+
+                    b.Property<string>("RazorpayPaymentId")
                         .HasMaxLength(200)
                         .HasColumnType("nvarchar(200)");
 
@@ -628,12 +632,12 @@ namespace PKeetDashboard.API.Migrations
 
                     b.HasKey("Id");
 
-                    b.HasIndex("StripeSessionId")
+                    b.HasIndex("RazorpayOrderId")
                         .IsUnique();
 
                     b.HasIndex("UserId");
 
-                    b.ToTable("StripePaymentReceipts");
+                    b.ToTable("PaymentReceipts");
                 });
 
             modelBuilder.Entity("PKeetDashboard.API.Entities.Testimonial", b =>

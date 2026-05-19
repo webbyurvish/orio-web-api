@@ -25,7 +25,7 @@ public class CallSessionsController : ControllerBase
     private readonly IAnalyticsRecorder _analytics;
     private static readonly TimeSpan FreeSessionDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan FreeSessionCooldown = TimeSpan.FromMinutes(15);
-    private const decimal CreditsPerHour = 1.0m; // 60 minutes = 1 credit
+    private const decimal CreditsPerHour = 2.0m; // 30 minutes = 1 credit
 
     public CallSessionsController(AppDbContext db, IConfiguration configuration, ILogger<CallSessionsController> logger, IAnalyticsRecorder analytics)
     {
@@ -202,7 +202,7 @@ public class CallSessionsController : ControllerBase
             .AsNoTracking()
             .Where(s => s.UserId == userId);
 
-        // Optional list view: must match dashboard "All / Live / Ended" semantics so pagination totals are correct.
+        // Optional list view: must match dashboard "All / Live / Ended / Not Activated" semantics so pagination totals are correct.
         var utcNow = DateTime.UtcNow;
         var v = (view ?? "all").Trim().ToLowerInvariant();
         // Use ToLower() comparisons — EF Core cannot translate string.Equals(..., StringComparison).
@@ -220,6 +220,11 @@ public class CallSessionsController : ControllerBase
             query = query.Where(s =>
                 (s.Status ?? "").Trim().ToLower() == "ended" ||
                 (s.EndsAt.HasValue && s.EndsAt.Value <= utcNow));
+        }
+        else if (v is "not-activated" or "notactivated")
+        {
+            query = query.Where(s =>
+                (s.Status ?? "").Trim().ToLower() == "not activated");
         }
 
         query = query.OrderByDescending(s => s.CreatedAt);

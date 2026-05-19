@@ -24,7 +24,7 @@ public class AppDbContext : DbContext
     public DbSet<Resume> Resumes => Set<Resume>();
     public DbSet<CallSession> CallSessions => Set<CallSession>();
     public DbSet<CallSessionMessage> CallSessionMessages => Set<CallSessionMessage>();
-    public DbSet<StripePaymentReceipt> StripePaymentReceipts => Set<StripePaymentReceipt>();
+    public DbSet<PaymentReceipt> PaymentReceipts => Set<PaymentReceipt>();
     public DbSet<EmailVerificationCode> EmailVerificationCodes => Set<EmailVerificationCode>();
     public DbSet<UserDiscoveryResponse> UserDiscoveryResponses => Set<UserDiscoveryResponse>();
     public DbSet<UserFeedback> UserFeedbacks => Set<UserFeedback>();
@@ -154,12 +154,14 @@ public class AppDbContext : DbContext
             entity.Property(e => e.AiNotes).HasColumnType("nvarchar(max)");
         });
 
-        modelBuilder.Entity<StripePaymentReceipt>(entity =>
+        modelBuilder.Entity<PaymentReceipt>(entity =>
         {
+            entity.ToTable("PaymentReceipts");
             entity.HasKey(e => e.Id);
             entity.HasIndex(e => e.UserId);
-            entity.HasIndex(e => e.StripeSessionId).IsUnique();
-            entity.Property(e => e.StripeSessionId).IsRequired().HasMaxLength(200);
+            entity.HasIndex(e => e.RazorpayOrderId).IsUnique();
+            entity.Property(e => e.RazorpayOrderId).IsRequired().HasMaxLength(200);
+            entity.Property(e => e.RazorpayPaymentId).HasMaxLength(200);
             entity.Property(e => e.ProductId).IsRequired().HasMaxLength(100);
             entity.Property(e => e.CreditsApplied).HasColumnType("decimal(10,2)");
             entity.Property(e => e.Currency).HasMaxLength(10);
