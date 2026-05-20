@@ -17,7 +17,7 @@ public class AuthService
     private readonly IConfiguration _config;
     private readonly IEmailSender _emailSender;
     private readonly IAnalyticsRecorder _analytics;
-    private const decimal FirstSignupFreeCredits = 1m;
+    private const decimal FirstSignupFreeCredits = 10m;
 
     public AuthService(AppDbContext db, JwtService jwt, IConfiguration config, IEmailSender emailSender, IAnalyticsRecorder analytics)
     {
