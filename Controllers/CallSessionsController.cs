@@ -25,7 +25,7 @@ public class CallSessionsController : ControllerBase
     private readonly IAnalyticsRecorder _analytics;
     private static readonly TimeSpan FreeSessionDuration = TimeSpan.FromMinutes(10);
     private static readonly TimeSpan FreeSessionCooldown = TimeSpan.FromMinutes(15);
-    private const decimal CreditsPerHour = 2.0m; // 30 minutes = 1 credit
+    private const decimal CreditsPerThirtyMinuteBlock = 1.0m; // 30 minutes = 1 credit
 
     public CallSessionsController(AppDbContext db, IConfiguration configuration, ILogger<CallSessionsController> logger, IAnalyticsRecorder analytics)
     {
@@ -348,6 +348,7 @@ public class CallSessionsController : ControllerBase
     [ProducesResponseType(typeof(CallSessionDto), 200)]
     [ProducesResponseType(401)]
     [ProducesResponseType(404)]
+    [ProducesResponseType(409)]
     public async Task<ActionResult<CallSessionDto>> Activate([FromRoute] Guid id, CancellationToken ct)
     {
         var userIdStr = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
@@ -358,21 +359,45 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
-        // New rule: usage-based billing. Do NOT charge on activate.
         // If the session already ended, require a new session instead of re-activating.
         if ((session.Status ?? "").Trim().Equals("Ended", StringComparison.OrdinalIgnoreCase))
             return Conflict(new { message = "This session has ended. Please create a new session to start again." });
 
+        var priorStatus = (session.Status ?? "").Trim();
+        var wasAlreadyActive = priorStatus.Equals("Active", StringComparison.OrdinalIgnoreCase);
+
+        // Paid sessions: charge 1 credit when first activated (30-minute block). Unlimited plans are not charged.
+        if (!session.IsFreeSession && !wasAlreadyActive && session.CreditsCharged < CreditsPerThirtyMinuteBlock)
+        {
+            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
+            if (user == null)
+                return Unauthorized();
+
+            if (!await UserHasUnlimitedAccessAsync(userId, ct))
+            {
+                if (user.CallCredits < CreditsPerThirtyMinuteBlock)
+                    return Conflict(new { message = "You need at least 1 interview credit to activate a full session." });
+
+                user.CallCredits = Math.Round(user.CallCredits - CreditsPerThirtyMinuteBlock, 2, MidpointRounding.AwayFromZero);
+                session.CreditsCharged += CreditsPerThirtyMinuteBlock;
+            }
+        }
+
         session.Status = "Active";
-        session.ActivatedAtUtc = DateTime.UtcNow;
-        // EndsAt is no longer used for billing; keep it null for active sessions.
+        if (!wasAlreadyActive || session.ActivatedAtUtc == null)
+            session.ActivatedAtUtc = DateTime.UtcNow;
         session.EndsAt = null;
         await _db.SaveChangesAsync(ct);
 
         await _analytics.RecordAsync(
             userId,
             AnalyticsEventTypes.SessionActivated,
-            JsonSerializer.Serialize(new { sessionId = session.Id, mode = session.IsFreeSession ? "Free" : "Paid" }),
+            JsonSerializer.Serialize(new
+            {
+                sessionId = session.Id,
+                mode = session.IsFreeSession ? "Free" : "Paid",
+                creditsCharged = session.CreditsCharged
+            }),
             "server",
             session.Id,
             ct);
@@ -394,8 +419,7 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
-        // Extensions are no longer applicable with usage-based billing.
-        return BadRequest(new { message = "Sessions no longer use extensions. Billing is based on minutes used when you end the session." });
+        return BadRequest(new { message = "Sessions no longer use extensions. Each activation uses 1 credit for a 30-minute block." });
     }
 
     [HttpPost("{id:guid}/end")]
@@ -412,26 +436,7 @@ public class CallSessionsController : ControllerBase
         if (session == null)
             return NotFound();
 
-        // Usage-based billing: charge on end based on activated duration.
-        if (!session.IsFreeSession)
-        {
-            var user = await _db.Users.FirstOrDefaultAsync(u => u.Id == userId, ct);
-            if (user == null) return Unauthorized();
-
-            var start = session.ActivatedAtUtc ?? session.CreatedAt;
-            var minutesUsed = Math.Max(0, (DateTime.UtcNow - start).TotalMinutes);
-            // Credits: minutes / 60, rounded to 2 decimals.
-            var cost = Math.Round((decimal)minutesUsed / 60m * CreditsPerHour, 2, MidpointRounding.AwayFromZero);
-
-            if (cost > 0)
-            {
-                // Never go negative; if user has less than cost, charge what remains.
-                var charged = Math.Min(user.CallCredits, cost);
-                user.CallCredits -= charged;
-                session.CreditsCharged += charged;
-            }
-        }
-
+        // Credits are charged on activate (1 credit per 30-minute block), not on end.
         session.Status = "Ended";
         session.EndsAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
@@ -687,6 +692,16 @@ public class CallSessionsController : ControllerBase
         session.AiNotesUpdatedAt = DateTime.UtcNow;
         await _db.SaveChangesAsync(ct);
         return new AiNotesDto { Notes = session.AiNotes, UpdatedAt = session.AiNotesUpdatedAt };
+    }
+
+    private async Task<bool> UserHasUnlimitedAccessAsync(Guid userId, CancellationToken ct)
+    {
+        var planId = await _db.PaymentReceipts.AsNoTracking()
+            .Where(r => r.UserId == userId && (r.ProductId == "lifetime" || r.ProductId == "sub_monthly" || r.ProductId == "sub_yearly"))
+            .OrderByDescending(r => r.CreatedAt)
+            .Select(r => r.ProductId)
+            .FirstOrDefaultAsync(ct);
+        return !string.IsNullOrEmpty(planId);
     }
 
     /// <summary>
